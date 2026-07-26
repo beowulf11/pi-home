@@ -111,10 +111,12 @@ function fallbackAscii(): string[] {
 	}
 }
 
-function centerLine(line: string, width: number): string {
-	const safeLine = truncateToWidth(line, width, "");
-	const padding = Math.max(0, Math.floor((width - visibleWidth(safeLine)) / 2));
-	return `${" ".repeat(padding)}${safeLine}`;
+function centerLogoLine(line: string, canvasWidth: number, terminalWidth: number): string {
+	const safeCanvasWidth = Math.min(canvasWidth, terminalWidth);
+	const safeLine = truncateToWidth(line, safeCanvasWidth, "");
+	const trailingPadding = Math.max(0, safeCanvasWidth - visibleWidth(safeLine));
+	const blockPadding = Math.max(0, Math.floor((terminalWidth - safeCanvasWidth) / 2));
+	return `${" ".repeat(blockPadding)}${LOGO_COLOR}${safeLine}${" ".repeat(trailingPadding)}${RESET_FOREGROUND}`;
 }
 
 async function latestPiVersion(): Promise<string | undefined> {
@@ -245,11 +247,14 @@ export default async function customIntro(pi: ExtensionAPI) {
 				);
 				const topPadding = margin + Math.floor(flexiblePadding / 2);
 				const bottomPadding = margin + Math.ceil(flexiblePadding / 2);
+				const artCanvasWidth = art.reduce(
+					(maximum, line) => Math.max(maximum, visibleWidth(line)),
+					0,
+				);
 				const renderedArt = animateLogoEntrance(art, entranceFrame);
 				return [
 					...Array.from({ length: topPadding }, () => ""),
-					...renderedArt.map((line) =>
-						centerLine(`${LOGO_COLOR}${line}${RESET_FOREGROUND}`, width)),
+					...renderedArt.map((line) => centerLogoLine(line, artCanvasWidth, width)),
 					...Array.from({ length: bottomPadding }, () => ""),
 				];
 			},
