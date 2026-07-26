@@ -382,7 +382,11 @@ func (s *solver) raster(width, height int) ([]byte, []byte) {
 				grain = 168
 			}
 			out[y*width+x] = grain
-			land[y*width+x] = 255
+			// The flat tank floor stays visually part of the water silhouette.
+			// Only the rising right-hand beach receives the sand material.
+			if float64(x)/widthScale > beachStart {
+				land[y*width+x] = 255
+			}
 		}
 	}
 	// Scale particle splats with the simulation cells, not output pixels. A

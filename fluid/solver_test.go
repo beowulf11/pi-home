@@ -117,10 +117,13 @@ func TestRasterFillsInvisibleBeachWithLand(t *testing.T) {
 	s := newSolver(80, 40)
 	s.p = nil // isolate the static terrain layer
 	width, height := 120, 60
-	_, land := s.raster(width, height)
-	leftLand, rightLand := 0, 0
+	raster, land := s.raster(width, height)
+	leftFloor, leftLand, rightLand := 0, 0, 0
 	for y := 0; y < height; y++ {
 		for x := 0; x < 10; x++ {
+			if raster[y*width+x] > 0 {
+				leftFloor++
+			}
 			if land[y*width+x] > 0 {
 				leftLand++
 			}
@@ -129,11 +132,14 @@ func TestRasterFillsInvisibleBeachWithLand(t *testing.T) {
 			}
 		}
 	}
-	if leftLand == 0 {
-		t.Fatal("flat seabed was not rendered")
+	if leftFloor == 0 {
+		t.Fatal("flat floor disappeared from the water silhouette")
 	}
-	if rightLand < leftLand*3 {
-		t.Fatalf("rising beach was not visibly filled: left=%d right=%d", leftLand, rightLand)
+	if leftLand != 0 {
+		t.Fatalf("flat ocean floor was incorrectly colored as land: %d pixels", leftLand)
+	}
+	if rightLand == 0 {
+		t.Fatal("rising beach was not visibly filled")
 	}
 }
 
