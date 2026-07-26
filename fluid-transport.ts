@@ -5,19 +5,32 @@ export interface FluidFrame {
 	width: number;
 	height: number;
 	pixels: Uint8Array;
+	/** 255 for visible land, 0 for water/air at each source pixel. */
+	land: Uint8Array;
 }
 
 export function parseFrameLine(line: string): FluidFrame | undefined {
-	const match = line.match(/^frame (\d+) ([1-9]\d*) ([1-9]\d*) ([A-Za-z0-9+/]+={0,2})$/);
+	const match = line.match(/^frame (\d+) ([1-9]\d*) ([1-9]\d*) ([A-Za-z0-9+/]+={0,2}) ([A-Za-z0-9+/]+={0,2})$/);
 	if (!match) return undefined;
 	const sequence = Number(match[1]);
 	const width = Number(match[2]);
 	const height = Number(match[3]);
 	if (!Number.isSafeInteger(sequence) || !Number.isSafeInteger(width) || !Number.isSafeInteger(height)) return undefined;
-	const encoded = match[4]!;
-	const buffer = Buffer.from(encoded, "base64");
-	if (buffer.length !== width * height || buffer.toString("base64") !== encoded) return undefined;
-	return { sequence, width, height, pixels: new Uint8Array(buffer) };
+	const encodedPixels = match[4]!;
+	const encodedLand = match[5]!;
+	const pixels = Buffer.from(encodedPixels, "base64");
+	const land = Buffer.from(encodedLand, "base64");
+	const expectedLength = width * height;
+	if (pixels.length !== expectedLength || land.length !== expectedLength
+		|| pixels.toString("base64") !== encodedPixels
+		|| land.toString("base64") !== encodedLand) return undefined;
+	return {
+		sequence,
+		width,
+		height,
+		pixels: new Uint8Array(pixels),
+		land: new Uint8Array(land),
+	};
 }
 
 export class FluidTransport {

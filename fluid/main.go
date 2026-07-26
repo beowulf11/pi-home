@@ -54,8 +54,15 @@ func main() {
 				continue
 			}
 			s.step(1.0 / 60)
-			pixels := s.raster(width, height)
-			fmt.Printf("frame %d %d %d %s\n", s.sequence, width, height, base64.StdEncoding.EncodeToString(pixels))
+			pixels, land := s.raster(width, height)
+			fmt.Printf(
+				"frame %d %d %d %s %s\n",
+				s.sequence,
+				width,
+				height,
+				base64.StdEncoding.EncodeToString(pixels),
+				base64.StdEncoding.EncodeToString(land),
+			)
 		}
 	}
 }

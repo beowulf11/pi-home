@@ -15,7 +15,7 @@ import { generateDefaultWaveFrames } from "./default-wave-animation.ts";
 import { FluidTransport } from "./fluid-transport.ts";
 import { defaultWaveDimensions, EDITOR_FOOTER_ROWS } from "./intro-layout.ts";
 import { resolveIntroProfile } from "./intro-config.ts";
-import { rasterToAscii } from "./raster-to-ascii.ts";
+import { rasterToAscii, rasterToLandMask } from "./raster-to-ascii.ts";
 import {
 	animateLogoEntrance,
 	ENTRANCE_END_FRAME,
@@ -36,6 +36,7 @@ const DEFAULT_MAX_LOGO_WIDTH = 48;
 const DEFAULT_MAX_LOGO_ROWS = 20;
 const MAX_VISIBLE_PACKAGE_UPDATES = 4;
 const LOGO_COLOR = "\x1b[38;2;242;137;84m";
+const LAND_COLOR = "\x1b[38;2;214;181;110m";
 const RESET_FOREGROUND = "\x1b[39m";
 
 interface PiRelease {
@@ -129,6 +130,20 @@ function fallbackAscii(): string[] {
 	} catch {
 		return ["pi"];
 	}
+}
+
+function colorizeFluidLine(line: string, land: readonly boolean[]): string {
+	let output = "";
+	let activeColor = "";
+	for (const [index, character] of [...line].entries()) {
+		const color = land[index] ? LAND_COLOR : LOGO_COLOR;
+		if (color !== activeColor) {
+			output += color;
+			activeColor = color;
+		}
+		output += character;
+	}
+	return `${output}${RESET_FOREGROUND}`;
 }
 
 function centerLogoLine(line: string, canvasWidth: number, terminalWidth: number): string {
@@ -236,7 +251,13 @@ export default async function customIntro(pi: ExtensionAPI) {
 			let timer: ReturnType<typeof setInterval> | undefined;
 			let disposed = false;
 			let fluidTransport: FluidTransport | undefined;
-			let fluidAscii: { sequence: number; width: number; rows: number; lines: string[] } | undefined;
+			let fluidAscii: {
+				sequence: number;
+				width: number;
+				rows: number;
+				lines: string[];
+				land: boolean[][];
+			} | undefined;
 			const finish = () => {
 				animationActive = false;
 				if (timer) clearInterval(timer);
@@ -321,6 +342,13 @@ export default async function customIntro(pi: ExtensionAPI) {
 								dimensions.rows,
 								{ previous: fluidAscii?.lines },
 							),
+							land: rasterToLandMask(
+								latest.land,
+								latest.width,
+								latest.height,
+								dimensions.width,
+								dimensions.rows,
+							),
 						};
 					}
 					if (fluidAscii) art = fluidAscii.lines;
@@ -338,12 +366,14 @@ export default async function customIntro(pi: ExtensionAPI) {
 					0,
 				);
 				let renderedArt = art;
+				let renderedLand: boolean[][] | undefined;
 				if (shouldAnimate) {
 					if (introProfile.animation === "default-wave") {
 						const fallbackFrame = animationFrames && animationFrames.length > 0
 							? entranceFrame % animationFrames.length
 							: 0;
 						renderedArt = fluidAscii?.lines ?? animationFrames?.[fallbackFrame] ?? art;
+						renderedLand = fluidAscii?.land;
 					} else if (converted) {
 						try {
 							const logoMtime = statSync(join(EXTENSION_DIR, "logo.svg")).mtimeMs;
@@ -370,7 +400,11 @@ export default async function customIntro(pi: ExtensionAPI) {
 				}
 				return [
 					...Array.from({ length: topPadding }, () => ""),
-					...renderedArt.map((line) => centerLogoLine(line, artCanvasWidth, width)),
+					...renderedArt.map((line, row) => centerLogoLine(
+						renderedLand ? colorizeFluidLine(line, renderedLand[row] ?? []) : line,
+						artCanvasWidth,
+						width,
+					)),
 					...Array.from({ length: bottomPadding }, () => ""),
 				];
 			},

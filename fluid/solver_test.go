@@ -19,9 +19,9 @@ func TestRasterAndProgression(t *testing.T) {
 	if s.p[0] == before {
 		t.Fatal("particle state did not progress")
 	}
-	r := s.raster(31, 17)
-	if len(r) != 31*17 {
-		t.Fatalf("raster length=%d", len(r))
+	r, land := s.raster(31, 17)
+	if len(r) != 31*17 || len(land) != len(r) {
+		t.Fatalf("raster lengths pixels=%d land=%d", len(r), len(land))
 	}
 	nonzero := false
 	for _, v := range r {
@@ -89,7 +89,7 @@ func TestWaterRemainsBoundedAndFiniteAcrossCycles(t *testing.T) {
 			t.Fatalf("invalid particle after sustained run: %+v", p)
 		}
 	}
-	raster := s.raster(160, 68)
+	raster, _ := s.raster(160, 68)
 	visible := 0
 	for _, value := range raster {
 		if value > 0 {
@@ -117,14 +117,14 @@ func TestRasterFillsInvisibleBeachWithLand(t *testing.T) {
 	s := newSolver(80, 40)
 	s.p = nil // isolate the static terrain layer
 	width, height := 120, 60
-	raster := s.raster(width, height)
+	_, land := s.raster(width, height)
 	leftLand, rightLand := 0, 0
 	for y := 0; y < height; y++ {
 		for x := 0; x < 10; x++ {
-			if raster[y*width+x] > 0 {
+			if land[y*width+x] > 0 {
 				leftLand++
 			}
-			if raster[y*width+width-1-x] > 0 {
+			if land[y*width+width-1-x] > 0 {
 				rightLand++
 			}
 		}
@@ -139,7 +139,7 @@ func TestRasterFillsInvisibleBeachWithLand(t *testing.T) {
 
 func TestLargeRasterKeepsWaterContinuous(t *testing.T) {
 	s := newSolver(48, 24)
-	raster := s.raster(240, 120)
+	raster, _ := s.raster(240, 120)
 	nonzero := 0
 	for _, value := range raster {
 		if value > 0 {
@@ -156,8 +156,8 @@ func TestOutputResizeDoesNotResetState(t *testing.T) {
 	s.step(1.0 / 60)
 	sequence := s.sequence
 	particle := s.p[0]
-	_ = s.raster(20, 10)
-	_ = s.raster(80, 40)
+	_, _ = s.raster(20, 10)
+	_, _ = s.raster(80, 40)
 	if s.sequence != sequence || s.p[0] != particle {
 		t.Fatal("raster resize mutated simulation")
 	}

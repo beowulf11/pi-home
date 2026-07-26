@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { rasterToAscii } from "./raster-to-ascii.ts";
+import { rasterToAscii, rasterToLandMask } from "./raster-to-ascii.ts";
 
 test("resamples to exact requested dimensions", () => {
 	const lines = rasterToAscii(Uint8Array.from([0, 255, 255, 0]), 2, 2, 7, 3, { density: " .#" });
@@ -15,6 +15,13 @@ test("maps dark and bright density endpoints", () => {
 test("rejects malformed raster input", () => {
 	assert.throws(() => rasterToAscii(new Uint8Array(3), 2, 2, 1, 1), /dimensions/);
 	assert.throws(() => rasterToAscii(new Uint8Array(1), 1, 1, -1, 1), /dimensions/);
+});
+
+test("resamples land material independently from character density", () => {
+	assert.deepEqual(
+		rasterToLandMask(Uint8Array.from([0, 255, 255, 255]), 2, 2, 2, 2, 1),
+		[[false, true], [true, true]],
+	);
 });
 
 test("prior glyph provides deterministic temporal hysteresis", () => {

@@ -3,7 +3,7 @@
 Global Pi extension that:
 
 - converts `source.png` into responsive ASCII art with the Go-based `ascii-image-converter` program;
-- centers the art using the current terminal width and height and renders it in `#F28954`;
+- centers the art using the current terminal width and height, rendering the logo/water in `#F28954` and beach land in sandy `#D6B56E`;
 - regenerates and caches the art when the terminal size or source image changes;
 - chooses a hard-coded intro profile from the Pi session's working directory;
 - plays the Praktik one-shot, dynamically rasterized entrance animation under `~/code/praktik`: SVG components move at fractional-pixel positions inside a clipped viewport, and every complete frame is reconverted to ASCII;
@@ -27,8 +27,8 @@ The default profile uses the FLIP pipeline described below. `default-wave-animat
 The default intro deliberately separates three layers:
 
 1. `fluid/` is a minimal Go 2-D PIC/FLIP solver and occupancy rasterizer. It uses particles, staggered MAC-grid transfers, gravity/advection, pressure projection, a 95% FLIP / 5% PIC grid-to-particle update, solid tank boundaries, and grayscale particle rasterization. Water volume is conserved, two spatial-hash particle-separation passes prevent visual collapse, and particle speed is bounded for long-running stability. The scene now begins as a settled ocean over a flat seabed that rises into an invisible smooth beach on the right. Broad overlapping swells enter from the left every three seconds, shoal against that solid slope, run upward, break, and flow back. The seabed and beach are rasterized beneath the water as a restrained deterministic ASCII grain with a brighter shoreline ridge, filling the land without competing with the fluid. Raster splats scale with simulation cells so the same persistent water body remains continuous on large terminals. Source attribution to Matthias Müller's MIT-licensed Ten Minute Physics FLIP work is in `fluid/solver.go`, with the license text in `fluid/THIRD_PARTY_LICENSES.md`.
-2. `fluid-transport.ts` owns the persistent child process and line protocol. Pi sends `resize <pixelWidth> <pixelHeight>` and `stop`; Go returns `frame <sequence> <width> <height> <base64 grayscale bytes>`. Only the newest valid complete frame is retained. stderr is drained away from the TUI.
-3. `raster-to-ascii.ts` is pure TypeScript area resampling/density conversion with terminal-cell aspect compensation and optional deterministic temporal hysteresis.
+2. `fluid-transport.ts` owns the persistent child process and line protocol. Pi sends `resize <pixelWidth> <pixelHeight>` and `stop`; Go returns `frame <sequence> <width> <height> <base64 grayscale bytes> <base64 land-mask bytes>`. Only the newest valid complete frame is retained. stderr is drained away from the TUI.
+3. `raster-to-ascii.ts` is pure TypeScript area resampling/density conversion with terminal-cell aspect compensation and optional deterministic temporal hysteresis. It independently resamples the material mask so ANSI styling cannot alter geometry or character selection.
 
 The child is started lazily by the default header's first animated render, never while the extension factory loads. Its initial resize determines the stable physics grid. Later terminal resizes change only raster output dimensions, preserving normalized particle positions and velocity. The fluid canvas uses the complete terminal width and all available terminal rows except the adaptive top/bottom margins and Pi's editor/footer reservation. At 60 fps it continues for as long as the empty intro is idle, then agent start, header disposal, or session shutdown stops it idempotently. The last buffered frame remains available for the static header. The Praktik profile remains a finite entrance animation.
 

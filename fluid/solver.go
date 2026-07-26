@@ -361,8 +361,9 @@ func (s *solver) step(dt float64) {
 	s.sequence++
 }
 
-func (s *solver) raster(width, height int) []byte {
+func (s *solver) raster(width, height int) ([]byte, []byte) {
 	out := make([]byte, width*height)
+	land := make([]byte, width*height)
 	// Render the otherwise invisible collision terrain as a restrained,
 	// deterministic grain. The brighter surface ridge keeps the shoreline
 	// readable while the lower-density interior remains visually secondary.
@@ -381,6 +382,7 @@ func (s *solver) raster(width, height int) []byte {
 				grain = 168
 			}
 			out[y*width+x] = grain
+			land[y*width+x] = 255
 		}
 	}
 	// Scale particle splats with the simulation cells, not output pixels. A
@@ -405,9 +407,10 @@ func (s *solver) raster(width, height int) []byte {
 				i := y*width + x
 				if value > int(out[i]) {
 					out[i] = byte(value)
+					land[i] = 0
 				}
 			}
 		}
 	}
-	return out
+	return out, land
 }
