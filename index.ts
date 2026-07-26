@@ -16,6 +16,7 @@ import {
 	ENTRANCE_END_FRAME,
 	ENTRANCE_INTERVAL_MS,
 } from "./logo-animation.ts";
+import { generateSvgAsciiFrames } from "./svg-ascii-animation.ts";
 
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const SOURCE_PATH = join(EXTENSION_DIR, "source.png");
@@ -25,8 +26,8 @@ const PI_RELEASE_URL = "https://pi.dev/api/latest-version";
 const UPDATE_TIMEOUT_MS = 10_000;
 const ASCII_MAP = " .:-=+*#%@";
 const CONVERTER = "ascii-image-converter";
-const MAX_LOGO_WIDTH = 48;
-const MAX_LOGO_ROWS = 20;
+const DEFAULT_MAX_LOGO_WIDTH = 48;
+const DEFAULT_MAX_LOGO_ROWS = 20;
 const EDITOR_FOOTER_ROWS = 8;
 const MAX_VISIBLE_PACKAGE_UPDATES = 4;
 const LOGO_COLOR = "\x1b[38;2;242;137;84m";
@@ -36,7 +37,14 @@ interface PiRelease {
 	version: string;
 }
 
-let cachedArt: { key: string; lines: string[] } | undefined;
+interface ConvertedArt {
+	key: string;
+	lines: string[];
+	simple: boolean;
+}
+
+let cachedArt: ConvertedArt | undefined;
+let cachedAnimation: { key: string; frames: string[][] } | undefined;
 
 function runConverter(sizeFlag: "-W" | "-H", size: number, simple: boolean): string[] {
 	const detailArgs = simple ? ["-m", ASCII_MAP] : ["--complex"];
@@ -60,30 +68,37 @@ function verticalMargin(terminalRows: number): number {
 	return 4;
 }
 
+function logoLimits(terminalWidth: number, terminalRows: number): { width: number; rows: number } {
+	if (terminalWidth >= 220 && terminalRows >= 70) return { width: 96, rows: 40 };
+	if (terminalWidth >= 140 && terminalRows >= 52) return { width: 72, rows: 30 };
+	return { width: DEFAULT_MAX_LOGO_WIDTH, rows: DEFAULT_MAX_LOGO_ROWS };
+}
+
 function imageToAscii(
 	terminalWidth: number,
 	terminalRows: number,
 	updateRows: number,
 	margin: number,
-): string[] | undefined {
+): ConvertedArt | undefined {
 	try {
 		const mtime = statSync(SOURCE_PATH).mtimeMs;
-		const widthLimit = Math.max(2, Math.min(MAX_LOGO_WIDTH, Math.floor(terminalWidth * 0.78)));
+		const limits = logoLimits(terminalWidth, terminalRows);
+		const widthLimit = Math.max(2, Math.min(limits.width, Math.floor(terminalWidth * 0.78)));
 		const rowLimit = Math.max(
 			2,
 			Math.min(
-				MAX_LOGO_ROWS,
+				limits.rows,
 				terminalRows - margin * 2 - EDITOR_FOOTER_ROWS - updateRows,
 			),
 		);
 		const simple = Math.min(widthLimit, rowLimit * 2) < 40;
 		const cacheKey = `${mtime}:${widthLimit}:${rowLimit}:${simple}`;
-		if (cachedArt?.key === cacheKey) return cachedArt.lines;
+		if (cachedArt?.key === cacheKey) return cachedArt;
 
 		let lines = runConverter("-W", widthLimit, simple);
 		if (lines.length > rowLimit) lines = runConverter("-H", rowLimit, simple);
-		cachedArt = { key: cacheKey, lines };
-		return lines;
+		cachedArt = { key: cacheKey, lines, simple };
+		return cachedArt;
 	} catch {
 		return undefined;
 	}
@@ -238,7 +253,7 @@ export default async function customIntro(pi: ExtensionAPI) {
 					startupUpdateRows,
 					margin,
 				);
-				const art = converted
+				const art = converted?.lines
 					?? fallbackAscii().map((line) => truncateToWidth(line, width, ""));
 				const reservedRows = EDITOR_FOOTER_ROWS + startupUpdateRows;
 				const flexiblePadding = Math.max(
@@ -251,7 +266,32 @@ export default async function customIntro(pi: ExtensionAPI) {
 					(maximum, line) => Math.max(maximum, visibleWidth(line)),
 					0,
 				);
-				const renderedArt = animateLogoEntrance(art, entranceFrame);
+				let renderedArt = art;
+				if (shouldAnimate) {
+					if (converted) {
+						try {
+							const logoMtime = statSync(join(EXTENSION_DIR, "logo.svg")).mtimeMs;
+							const animationKey = `${converted.key}:${logoMtime}`;
+							if (cachedAnimation?.key !== animationKey) {
+								const canvasWidth = art.reduce(
+									(maximum, line) => Math.max(maximum, [...line].length),
+									0,
+								);
+								cachedAnimation = {
+									key: animationKey,
+									frames: generateSvgAsciiFrames(canvasWidth, art.length, converted.simple),
+								};
+							}
+							renderedArt = cachedAnimation.frames[
+								Math.min(entranceFrame, cachedAnimation.frames.length - 1)
+							] ?? art;
+						} catch {
+							renderedArt = animateLogoEntrance(art, entranceFrame);
+						}
+					} else {
+						renderedArt = animateLogoEntrance(art, entranceFrame);
+					}
+				}
 				return [
 					...Array.from({ length: topPadding }, () => ""),
 					...renderedArt.map((line) => centerLogoLine(line, artCanvasWidth, width)),
@@ -260,6 +300,7 @@ export default async function customIntro(pi: ExtensionAPI) {
 			},
 			invalidate() {
 				cachedArt = undefined;
+				cachedAnimation = undefined;
 			},
 			dispose() {
 				finish();

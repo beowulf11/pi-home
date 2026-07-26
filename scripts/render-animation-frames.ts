@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { animateLogoEntrance, ENTRANCE_END_FRAME } from "../logo-animation.ts";
+import { ENTRANCE_END_FRAME } from "../logo-animation.ts";
+import { generateSvgAsciiFrames } from "../svg-ascii-animation.ts";
 
 const extensionDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const argument = (name: string, fallback: string): string => {
@@ -18,7 +19,8 @@ const outputDir = resolve(argument(
 const sourcePath = join(extensionDir, "source.png");
 const orange = "#F28954";
 const background = "#282C34";
-const characterWidth = 10;
+// Menlo 16px advances by ~9.64px; matching it keeps the fixed ASCII canvas centered.
+const characterWidth = 9.64;
 const lineHeight = 20;
 const padding = 16;
 
@@ -32,6 +34,7 @@ const ascii = execFileSync("ascii-image-converter", [sourcePath, "-H", String(he
 	encoding: "utf8",
 }).replaceAll("\r\n", "\n").replace(/\n$/, "").split("\n");
 const width = Math.max(...ascii.map((line) => [...line].length));
+const animationFrames = generateSvgAsciiFrames(width, ascii.length, simple);
 const imageWidth = width * characterWidth + padding * 2;
 const imageHeight = ascii.length * lineHeight + padding * 2;
 
@@ -39,7 +42,7 @@ rmSync(outputDir, { recursive: true, force: true });
 mkdirSync(outputDir, { recursive: true });
 const pngPaths: string[] = [];
 for (let frame = 0; frame <= ENTRANCE_END_FRAME; frame += 1) {
-	const lines = animateLogoEntrance(ascii, frame);
+	const lines = animationFrames[frame] ?? animationFrames.at(-1) ?? ascii;
 	const text = lines.map((line, row) =>
 		`  <text x="${padding}" y="${padding + (row + 0.8) * lineHeight}">${escapeXml(line)}</text>`).join("\n");
 	const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${imageWidth}" height="${imageHeight}" viewBox="0 0 ${imageWidth} ${imageHeight}">
