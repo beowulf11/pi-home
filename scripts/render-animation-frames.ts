@@ -10,7 +10,11 @@ const argument = (name: string, fallback: string): string => {
 	return index >= 0 && process.argv[index + 1] ? process.argv[index + 1]! : fallback;
 };
 const height = Math.max(4, Number.parseInt(argument("--height", "20"), 10));
-const outputDir = resolve(argument("--out", join(extensionDir, "frames", `h${height}`)));
+const simple = process.argv.includes("--simple");
+const outputDir = resolve(argument(
+	"--out",
+	join(extensionDir, "frames", `h${height}${simple ? "-simple" : "-complex"}`),
+));
 const sourcePath = join(extensionDir, "source.png");
 const orange = "#F28954";
 const background = "#282C34";
@@ -23,7 +27,8 @@ const escapeXml = (text: string): string => text
 	.replaceAll("<", "&lt;")
 	.replaceAll(">", "&gt;");
 
-const ascii = execFileSync("ascii-image-converter", [sourcePath, "-H", String(height), "--complex"], {
+const detailArgs = simple ? ["-m", " .:-=+*#%@"] : ["--complex"];
+const ascii = execFileSync("ascii-image-converter", [sourcePath, "-H", String(height), ...detailArgs], {
 	encoding: "utf8",
 }).replaceAll("\r\n", "\n").replace(/\n$/, "").split("\n");
 const width = Math.max(...ascii.map((line) => [...line].length));

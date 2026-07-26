@@ -13,21 +13,42 @@ function pointKey(point: Point): string {
 function findCenterDot(grid: string[][]): Point[] {
 	const height = grid.length;
 	const width = grid.reduce((maximum, row) => Math.max(maximum, row.length), 0);
-	const points: Point[] = [];
+	const visited = new Set<string>();
+	const components: Point[][] = [];
 
-	// The canonical SVG's circle occupies 40–60% on both axes. A small amount
-	// of tolerance includes antialiased edge characters. Geometry is reliable
-	// even when low-resolution ASCII makes the dot touch the arrows diagonally.
+	// Four-way connectivity keeps the center circle separate even at tiny
+	// resolutions where antialiased dot and arrow characters touch diagonally.
 	for (let y = 0; y < height; y += 1) {
 		for (let x = 0; x < width; x += 1) {
-			const normalizedX = (x + 0.5) / width;
-			const normalizedY = (y + 0.5) / height;
-			if (normalizedX < 0.385 || normalizedX > 0.615) continue;
-			if (normalizedY < 0.385 || normalizedY > 0.615) continue;
-			if ((grid[y]?.[x] ?? " ") !== " ") points.push({ x, y });
+			const start = { x, y };
+			if ((grid[y]?.[x] ?? " ") === " " || visited.has(pointKey(start))) continue;
+			const points: Point[] = [];
+			const queue = [start];
+			visited.add(pointKey(start));
+			while (queue.length > 0) {
+				const point = queue.pop()!;
+				points.push(point);
+				for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+					const neighbor = { x: point.x + dx, y: point.y + dy };
+					if (neighbor.x < 0 || neighbor.y < 0 || neighbor.x >= width || neighbor.y >= height) continue;
+					if ((grid[neighbor.y]?.[neighbor.x] ?? " ") === " ") continue;
+					const key = pointKey(neighbor);
+					if (visited.has(key)) continue;
+					visited.add(key);
+					queue.push(neighbor);
+				}
+			}
+			components.push(points);
 		}
 	}
-	return points;
+
+	const centerX = (width - 1) / 2;
+	const centerY = (height - 1) / 2;
+	return components.sort((left, right) => {
+		const nearestDistance = (component: Point[]) => Math.min(...component.map((point) =>
+			Math.hypot(point.x - centerX, (point.y - centerY) * 2)));
+		return nearestDistance(left) - nearestDistance(right);
+	})[0] ?? [];
 }
 
 function easeOutCubic(progress: number): number {
