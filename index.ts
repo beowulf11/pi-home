@@ -11,6 +11,11 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+	animateLogoEntrance,
+	ENTRANCE_END_FRAME,
+	ENTRANCE_INTERVAL_MS,
+} from "./logo-animation.ts";
 
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const SOURCE_PATH = join(EXTENSION_DIR, "source.png");
@@ -26,120 +31,6 @@ const EDITOR_FOOTER_ROWS = 8;
 const MAX_VISIBLE_PACKAGE_UPDATES = 4;
 const LOGO_COLOR = "\x1b[38;2;242;137;84m";
 const RESET_FOREGROUND = "\x1b[39m";
-const ENTRANCE_INTERVAL_MS = 90;
-const DOT_BUILD_END_FRAME = 7;
-const ARROW_ENTRY_START_FRAME = 5;
-const ARROW_ENTRY_END_FRAME = 25;
-const ENTRANCE_END_FRAME = 28;
-
-type Point = { x: number; y: number };
-
-function pointKey(point: Point): string {
-	return `${point.x}:${point.y}`;
-}
-
-function findCenterComponent(grid: string[][]): Point[] {
-	const height = grid.length;
-	const width = grid.reduce((maximum, row) => Math.max(maximum, row.length), 0);
-	const visited = new Set<string>();
-	const components: Point[][] = [];
-
-	for (let y = 0; y < height; y += 1) {
-		for (let x = 0; x < width; x += 1) {
-			if ((grid[y]?.[x] ?? " ") === " ") continue;
-			const start = { x, y };
-			if (visited.has(pointKey(start))) continue;
-
-			const component: Point[] = [];
-			const queue = [start];
-			visited.add(pointKey(start));
-			while (queue.length > 0) {
-				const point = queue.pop()!;
-				component.push(point);
-				for (let dy = -1; dy <= 1; dy += 1) {
-					for (let dx = -1; dx <= 1; dx += 1) {
-						if (dx === 0 && dy === 0) continue;
-						const neighbor = { x: point.x + dx, y: point.y + dy };
-						if (neighbor.x < 0 || neighbor.y < 0 || neighbor.x >= width || neighbor.y >= height) continue;
-						if ((grid[neighbor.y]?.[neighbor.x] ?? " ") === " ") continue;
-						const key = pointKey(neighbor);
-						if (visited.has(key)) continue;
-						visited.add(key);
-						queue.push(neighbor);
-					}
-				}
-			}
-			components.push(component);
-		}
-	}
-
-	const centerX = (width - 1) / 2;
-	const centerY = (height - 1) / 2;
-	return components.sort((left, right) => {
-		const distance = (component: Point[]) => {
-			const x = component.reduce((sum, point) => sum + point.x, 0) / component.length;
-			const y = component.reduce((sum, point) => sum + point.y, 0) / component.length;
-			return Math.hypot((x - centerX) / Math.max(1, width), (y - centerY) / Math.max(1, height));
-		};
-		return distance(left) - distance(right);
-	})[0] ?? [];
-}
-
-function easeOutCubic(progress: number): number {
-	const clamped = Math.max(0, Math.min(1, progress));
-	return 1 - (1 - clamped) ** 3;
-}
-
-function animateLogoEntrance(lines: string[], frame: number): string[] {
-	if (frame >= ARROW_ENTRY_END_FRAME) return lines;
-	const width = lines.reduce((maximum, line) => Math.max(maximum, [...line].length), 0);
-	const height = lines.length;
-	if (width === 0 || height === 0) return lines;
-
-	const grid = lines.map((line) => {
-		const row = [...line];
-		return [...row, ...Array.from({ length: width - row.length }, () => " ")];
-	});
-	const output = Array.from({ length: height }, () => Array.from({ length: width }, () => " "));
-	const dotPoints = findCenterComponent(grid);
-	const dotKeys = new Set(dotPoints.map(pointKey));
-	const centerX = (width - 1) / 2;
-	const centerY = (height - 1) / 2;
-
-	const orderedDot = [...dotPoints].sort((left, right) => {
-		const leftDistance = Math.hypot(left.x - centerX, (left.y - centerY) * 2);
-		const rightDistance = Math.hypot(right.x - centerX, (right.y - centerY) * 2);
-		return leftDistance - rightDistance;
-	});
-	const dotProgress = easeOutCubic(frame / DOT_BUILD_END_FRAME);
-	const visibleDotCount = Math.max(1, Math.ceil(orderedDot.length * dotProgress));
-	for (const point of orderedDot.slice(0, visibleDotCount)) {
-		output[point.y]![point.x] = grid[point.y]![point.x]!;
-	}
-
-	const arrowProgress = easeOutCubic(
-		(frame - ARROW_ENTRY_START_FRAME)
-			/ (ARROW_ENTRY_END_FRAME - ARROW_ENTRY_START_FRAME),
-	);
-	if (arrowProgress > 0) {
-		const horizontalTravel = Math.ceil(width * 0.55);
-		const verticalTravel = Math.ceil(height * 0.55);
-		for (let y = 0; y < height; y += 1) {
-			for (let x = 0; x < width; x += 1) {
-				const character = grid[y]![x]!;
-				if (character === " " || dotKeys.has(pointKey({ x, y }))) continue;
-				const startX = x < centerX ? -horizontalTravel : horizontalTravel;
-				const startY = y < centerY ? -verticalTravel : verticalTravel;
-				const translatedX = x + Math.round(startX * (1 - arrowProgress));
-				const translatedY = y + Math.round(startY * (1 - arrowProgress));
-				if (translatedX < 0 || translatedY < 0 || translatedX >= width || translatedY >= height) continue;
-				output[translatedY]![translatedX] = character;
-			}
-		}
-	}
-
-	return output.map((row) => row.join("").trimEnd());
-}
 
 interface PiRelease {
 	version: string;

@@ -35,7 +35,17 @@ brew install TheZoraiz/ascii-image-converter/ascii-image-converter
 
 The stored source is trimmed to its visible bounds to avoid wasting output space on transparent padding. The extension uses `ascii-image-converter --complex` at normal sizes and falls back to a simpler character map on very small terminals. The logo is capped at 48 columns by 20 rows. Vertical margins adapt to terminal height: one row below 32 terminal rows, two below 44, and four on larger screens. Only the rows used by an actual update notice are reserved, so small screens no longer shrink the logo or add empty space for an absent notice. It first sizes by terminal width and, only when necessary, recalculates by terminal height.
 
-The entrance runs once only for an empty session and settles on the exact final ASCII logo. It immediately completes if the user types, submits input, or agent work begins. Timing is controlled by `ENTRANCE_INTERVAL_MS`, `DOT_BUILD_END_FRAME`, `ARROW_ENTRY_START_FRAME`, and `ARROW_ENTRY_END_FRAME`.
+The entrance runs once only for an empty session and settles on the exact final ASCII logo. It immediately completes if the user types, submits input, or agent work begins. Timing is controlled in `logo-animation.ts` by `ENTRANCE_INTERVAL_MS`, `DOT_BUILD_END_FRAME`, `ARROW_ENTRY_START_FRAME`, and `ARROW_ENTRY_END_FRAME`.
+
+Render every animation frame as `.txt`, `.svg`, and `.png`, plus a PNG contact sheet, with:
+
+```sh
+cd ~/.pi/agent/extensions/custom-intro
+npm run render-frames -- --height 20
+npm run render-frames -- --height 12 --out /tmp/praktik-frames
+```
+
+The default output is `frames/h<height>/` and is intentionally ignored by Git. This uses the exact same `animateLogoEntrance()` implementation as Pi, so frame previews cannot drift from the extension.
 
 Run `/reload` after changing extension code. The global `quietStartup` setting hides Pi's built-in skills/extensions listing so the intro stays clean. Set `PI_OFFLINE=1` to disable all update checks. Existing `PI_SKIP_VERSION_CHECK=1` and `PI_SKIP_PACKAGE_UPDATE_CHECK=1` settings disable their respective custom checks.
 
