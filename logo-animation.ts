@@ -1,8 +1,11 @@
-export const ENTRANCE_INTERVAL_MS = 90;
-export const DOT_BUILD_END_FRAME = 7;
-export const ARROW_ENTRY_START_FRAME = 5;
-export const ARROW_ENTRY_END_FRAME = 25;
-export const ENTRANCE_END_FRAME = 28;
+export const ENTRANCE_FPS = 60;
+export const ENTRANCE_INTERVAL_MS = 1_000 / ENTRANCE_FPS;
+
+// Preserve the original ~2.5 second choreography while rendering at 60 FPS.
+export const DOT_BUILD_END_FRAME = 38;
+export const ARROW_ENTRY_START_FRAME = 27;
+export const ARROW_ENTRY_END_FRAME = 135;
+export const ENTRANCE_END_FRAME = 151;
 
 type Point = { x: number; y: number };
 
