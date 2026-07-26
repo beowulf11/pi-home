@@ -8,6 +8,12 @@ package main
 
 import "math"
 
+const (
+	wavePeriodFrames = 240 // one impulse every four seconds at 60 fps
+	wavePulseFrames  = 48  // smooth 0.8 second push
+	maxParticleSpeed = 1.75
+)
+
 type particle struct{ x, y, vx, vy float64 }
 
 type solver struct {
@@ -83,7 +89,80 @@ func (s *solver) sampleVelocity(x, y float64, u, v []float64) (float64, float64)
 	return sample(u, s.nx+1, s.ny, x*float64(s.nx), y*float64(s.ny)-.5), sample(v, s.nx, s.ny+1, x*float64(s.nx)-.5, y*float64(s.ny))
 }
 
+// applyWaveMaker supplies energy that numerical damping would otherwise remove.
+// A smooth pulse near the left wall periodically pushes the pool rightward and
+// slightly upward, producing a repeating wave without creating/removing water.
+func (s *solver) applyWaveMaker(dt float64) bool {
+	phase := int(s.sequence % wavePeriodFrames)
+	if phase >= wavePulseFrames {
+		return false
+	}
+	envelope := math.Sin(math.Pi * (float64(phase) + .5) / wavePulseFrames)
+	for i := range s.p {
+		p := &s.p[i]
+		if p.x >= .24 {
+			continue
+		}
+		influence := 1 - p.x/.24
+		p.vx += 1.8 * envelope * influence * dt
+		p.vy += .32 * envelope * influence * dt
+	}
+	return true
+}
+
+// separateParticles prevents the marker particles from collapsing into a few
+// dense points over an indefinitely running intro. Distances are measured in
+// simulation-cell units and a grid keeps neighbor lookup linear.
+func (s *solver) separateParticles() {
+	const minimumDistance = .44
+	buckets := make([][]int, s.nx*s.ny)
+	for i, p := range s.p {
+		x := clamp(int(p.x*float64(s.nx)), 0, s.nx-1)
+		y := clamp(int(p.y*float64(s.ny)), 0, s.ny-1)
+		buckets[y*s.nx+x] = append(buckets[y*s.nx+x], i)
+	}
+	for i := range s.p {
+		p := &s.p[i]
+		cellX := clamp(int(p.x*float64(s.nx)), 0, s.nx-1)
+		cellY := clamp(int(p.y*float64(s.ny)), 0, s.ny-1)
+		for by := max(0, cellY-1); by <= min(s.ny-1, cellY+1); by++ {
+			for bx := max(0, cellX-1); bx <= min(s.nx-1, cellX+1); bx++ {
+				for _, j := range buckets[by*s.nx+bx] {
+					if j <= i {
+						continue
+					}
+					q := &s.p[j]
+					dx := (q.x - p.x) * float64(s.nx)
+					dy := (q.y - p.y) * float64(s.ny)
+					distance := math.Hypot(dx, dy)
+					if distance >= minimumDistance {
+						continue
+					}
+					overlap := minimumDistance - distance
+					if distance < 1e-8 {
+						// Stable, deterministic direction for coincident markers.
+						angle := float64((i*37+j*17)%360) * math.Pi / 180
+						dx, dy, distance = math.Cos(angle), math.Sin(angle), 1
+					}
+					push := overlap * .5 / distance
+					p.x -= dx * push / float64(s.nx)
+					p.y -= dy * push / float64(s.ny)
+					q.x += dx * push / float64(s.nx)
+					q.y += dy * push / float64(s.ny)
+				}
+			}
+		}
+	}
+	horizontalMargin := 1.2 / float64(s.nx)
+	verticalMargin := 1.2 / float64(s.ny)
+	for i := range s.p {
+		s.p[i].x = math.Max(horizontalMargin, math.Min(1-horizontalMargin, s.p[i].x))
+		s.p[i].y = math.Max(verticalMargin, math.Min(1-verticalMargin, s.p[i].y))
+	}
+}
+
 func (s *solver) step(dt float64) {
+	s.applyWaveMaker(dt)
 	clear(s.u)
 	clear(s.v)
 	clear(s.weightU)
@@ -175,6 +254,11 @@ func (s *solver) step(dt float64) {
 		flipV := p.vy + picV - oldV
 		p.vx = .95*flipU + .05*picU
 		p.vy = .95*flipV + .05*picV
+		speed := math.Hypot(p.vx, p.vy)
+		if speed > maxParticleSpeed {
+			p.vx *= maxParticleSpeed / speed
+			p.vy *= maxParticleSpeed / speed
+		}
 		p.x += p.vx * dt
 		p.y += p.vy * dt
 		margin := 1.2 / float64(s.nx)
@@ -196,24 +280,33 @@ func (s *solver) step(dt float64) {
 			p.vy = -math.Abs(p.vy) * .15
 		}
 	}
+	// Two inexpensive relaxation passes preserve visible volume over long runs.
+	s.separateParticles()
+	s.separateParticles()
 	s.sequence++
 }
 
 func (s *solver) raster(width, height int) []byte {
 	out := make([]byte, width*height)
+	// Scale particle splats with the simulation cells, not output pixels. A
+	// large terminal therefore shows a continuous body of water instead of
+	// spreading a fixed particle count into nearly invisible isolated dots.
+	radiusX := math.Max(1.8, float64(width)/float64(s.nx)*.82)
+	radiusY := math.Max(1.8, float64(height)/float64(s.ny)*.82)
 	for _, p := range s.p {
 		cx := p.x * float64(width-1)
 		cy := (1 - p.y) * float64(height-1)
-		x0 := int(math.Floor(cx))
-		y0 := int(math.Floor(cy))
-		for dy := -1; dy <= 1; dy++ {
-			for dx := -1; dx <= 1; dx++ {
-				x, y := x0+dx, y0+dy
+		x0, x1 := int(math.Floor(cx-radiusX)), int(math.Ceil(cx+radiusX))
+		y0, y1 := int(math.Floor(cy-radiusY)), int(math.Ceil(cy+radiusY))
+		for y := y0; y <= y1; y++ {
+			for x := x0; x <= x1; x++ {
 				if x < 0 || y < 0 || x >= width || y >= height {
 					continue
 				}
-				d := math.Hypot(float64(x)-cx, float64(y)-cy)
-				value := int(210 * (1 - math.Min(1, d/1.8)))
+				dx := (float64(x) - cx) / radiusX
+				dy := (float64(y) - cy) / radiusY
+				d := math.Hypot(dx, dy)
+				value := int(255 * (1 - math.Min(1, d)))
 				i := y*width + x
 				if value > int(out[i]) {
 					out[i] = byte(value)
