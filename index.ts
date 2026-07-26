@@ -11,6 +11,8 @@ import {
 	type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { generateDefaultWaveFrames } from "./default-wave-animation.ts";
+import { resolveIntroProfile } from "./intro-config.ts";
 import {
 	animateLogoEntrance,
 	ENTRANCE_END_FRAME,
@@ -72,6 +74,19 @@ function logoLimits(terminalWidth: number, terminalRows: number): { width: numbe
 	if (terminalWidth >= 220 && terminalRows >= 70) return { width: 96, rows: 40 };
 	if (terminalWidth >= 140 && terminalRows >= 52) return { width: 72, rows: 30 };
 	return { width: DEFAULT_MAX_LOGO_WIDTH, rows: DEFAULT_MAX_LOGO_ROWS };
+}
+
+function defaultWaveDimensions(
+	terminalWidth: number,
+	terminalRows: number,
+	updateRows: number,
+	margin: number,
+): { width: number; rows: number } {
+	const limits = logoLimits(terminalWidth, terminalRows);
+	const width = Math.min(limits.width, Math.max(8, Math.floor(terminalWidth * 0.65)));
+	const desiredRows = Math.max(5, Math.floor(limits.rows * 0.45));
+	const availableRows = terminalRows - margin * 2 - EDITOR_FOOTER_ROWS - updateRows;
+	return { width, rows: Math.max(2, Math.min(desiredRows, availableRows)) };
 }
 
 function imageToAscii(
@@ -192,12 +207,12 @@ export default async function customIntro(pi: ExtensionAPI) {
 
 	let startupUpdatesVisible = false;
 	let startupUpdateRows = 0;
-	let finishLogoEntrance: (() => void) | undefined;
+	let finishIntroAnimation: (() => void) | undefined;
 
 	const hideStartupUpdates = (ctx: ExtensionContext) => {
 		startupUpdatesVisible = false;
 		startupUpdateRows = 0;
-		finishLogoEntrance?.();
+		finishIntroAnimation?.();
 		if (ctx.mode === "tui") ctx.ui.setWidget(UPDATE_WIDGET_KEY, undefined);
 	};
 
@@ -213,10 +228,11 @@ export default async function customIntro(pi: ExtensionAPI) {
 		if (ctx.mode !== "tui") return;
 		startupUpdatesVisible = true;
 		startupUpdateRows = 0;
-		finishLogoEntrance?.();
+		finishIntroAnimation?.();
 		const shouldAnimate = !ctx.sessionManager
 			.getBranch()
 			.some((entry) => entry.type === "message");
+		const introProfile = resolveIntroProfile(ctx.cwd);
 
 		ctx.ui.setHeader((tui, _theme) => {
 			let entranceFrame = shouldAnimate ? 0 : ENTRANCE_END_FRAME;
@@ -227,7 +243,7 @@ export default async function customIntro(pi: ExtensionAPI) {
 				entranceFrame = ENTRANCE_END_FRAME;
 				tui.requestRender();
 			};
-			finishLogoEntrance = finish;
+			finishIntroAnimation = finish;
 			if (shouldAnimate) {
 				timer = setInterval(() => {
 					if (ctx.ui.getEditorText().length > 0) {
@@ -247,14 +263,37 @@ export default async function customIntro(pi: ExtensionAPI) {
 			return {
 			render(width: number): string[] {
 				const margin = verticalMargin(tui.terminal.rows);
-				const converted = imageToAscii(
-					width,
-					tui.terminal.rows,
-					startupUpdateRows,
-					margin,
-				);
-				const art = converted?.lines
-					?? fallbackAscii().map((line) => truncateToWidth(line, width, ""));
+				let converted: ConvertedArt | undefined;
+				let animationFrames: string[][] | undefined;
+				let art: string[];
+
+				if (introProfile.animation === "praktik-entry") {
+					converted = imageToAscii(
+						width,
+						tui.terminal.rows,
+						startupUpdateRows,
+						margin,
+					);
+					art = converted?.lines
+						?? fallbackAscii().map((line) => truncateToWidth(line, width, ""));
+				} else {
+					const dimensions = defaultWaveDimensions(
+						width,
+						tui.terminal.rows,
+						startupUpdateRows,
+						margin,
+					);
+					const animationKey = `${introProfile.animation}:${dimensions.width}:${dimensions.rows}`;
+					if (cachedAnimation?.key !== animationKey) {
+						cachedAnimation = {
+							key: animationKey,
+							frames: generateDefaultWaveFrames(dimensions.width, dimensions.rows),
+						};
+					}
+					animationFrames = cachedAnimation.frames;
+					art = animationFrames.at(-1) ?? ["~"];
+				}
+
 				const reservedRows = EDITOR_FOOTER_ROWS + startupUpdateRows;
 				const flexiblePadding = Math.max(
 					0,
@@ -268,10 +307,14 @@ export default async function customIntro(pi: ExtensionAPI) {
 				);
 				let renderedArt = art;
 				if (shouldAnimate) {
-					if (converted) {
+					if (introProfile.animation === "default-wave") {
+						renderedArt = animationFrames?.[
+							Math.min(entranceFrame, (animationFrames?.length ?? 1) - 1)
+						] ?? art;
+					} else if (converted) {
 						try {
 							const logoMtime = statSync(join(EXTENSION_DIR, "logo.svg")).mtimeMs;
-							const animationKey = `${converted.key}:${logoMtime}`;
+							const animationKey = `${introProfile.id}:${converted.key}:${logoMtime}`;
 							if (cachedAnimation?.key !== animationKey) {
 								const canvasWidth = art.reduce(
 									(maximum, line) => Math.max(maximum, [...line].length),
@@ -304,7 +347,7 @@ export default async function customIntro(pi: ExtensionAPI) {
 			},
 			dispose() {
 				finish();
-				if (finishLogoEntrance === finish) finishLogoEntrance = undefined;
+				if (finishIntroAnimation === finish) finishIntroAnimation = undefined;
 			},
 		};
 		});

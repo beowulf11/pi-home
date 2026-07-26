@@ -5,9 +5,22 @@ Global Pi extension that:
 - converts `source.png` into responsive ASCII art with the Go-based `ascii-image-converter` program;
 - centers the art using the current terminal width and height and renders it in `#F28954`;
 - regenerates and caches the art when the terminal size or source image changes;
-- plays a one-shot, dynamically rasterized entrance animation: SVG components move at fractional-pixel positions inside a clipped viewport, and every complete frame is reconverted to ASCII;
+- chooses a hard-coded intro profile from the Pi session's working directory;
+- plays the Praktik one-shot, dynamically rasterized entrance animation under `~/code/praktik`: SVG components move at fractional-pixel positions inside a clipped viewport, and every complete frame is reconverted to ASCII;
+- plays a separate procedural wave intro everywhere else, ready for its own design iterations;
 - shows a minimal update list directly above the editor only when updates exist, then removes it as soon as input or agent work begins;
 - replaces Pi's built-in version/package update notices to avoid duplicates.
+
+## Intro profiles
+
+Profiles are currently defined in `intro-config.ts`. The first configured root containing `ctx.cwd` wins; exact roots and all descendants match without accidentally matching similarly prefixed sibling paths.
+
+| Profile | Working directory | Animation |
+|---|---|---|
+| `praktik` | `~/code/praktik` or any descendant | `praktik-entry` |
+| `default` | Everything else | `default-wave` |
+
+The default wave is intentionally a small first version in `default-wave-animation.ts`; it is isolated from the Praktik SVG pipeline so it can be redesigned independently. New hard-coded project profiles can be added to `INTRO_PROFILES` before a generic configuration format is introduced.
 
 ## Artwork
 
@@ -36,7 +49,7 @@ brew install imagemagick
 
 The stored source is trimmed to its visible bounds to avoid wasting output space on transparent padding. The extension uses `ascii-image-converter --complex` at normal sizes and falls back to a simpler character map on very small terminals. Logo caps scale with the terminal: 48×20 normally, 72×30 from 140×52 terminals, and 96×40 from 220×70 terminals (the square source and character aspect ratio can make the effective width smaller when the row cap wins). Vertical margins adapt to terminal height: one row below 32 terminal rows, two below 44, and four on larger screens. Only the rows used by an actual update notice are reserved, so small screens no longer shrink the logo or add empty space for an absent notice. It first sizes by terminal width and, only when necessary, recalculates by terminal height.
 
-The entrance runs once only for an empty session. `svg-ascii-animation.ts` splits the canonical compound SVG path into its five components, rasterizes those masks once at 4× the target character resolution, moves them with bilinear fractional-pixel sampling inside one fixed clipped rectangle, and converts every full raster back through the same simple or complex density map. Frames are cached by terminal/logo size. This avoids moving rigid ASCII characters between whole cells; edge glyphs evolve as the underlying SVG crosses character boundaries. The old character translator remains only as a fallback if SVG rasterization is unavailable.
+Animations run once only for an empty session. For the Praktik profile, `svg-ascii-animation.ts` splits the canonical compound SVG path into its five components, rasterizes those masks once at 4× the target character resolution, moves them with bilinear fractional-pixel sampling inside one fixed clipped rectangle, and converts every full raster back through the same simple or complex density map. Frames are cached by terminal/logo size. This avoids moving rigid ASCII characters between whole cells; edge glyphs evolve as the underlying SVG crosses character boundaries. The old character translator remains only as a fallback if SVG rasterization is unavailable.
 
 The animation immediately completes if the user types, submits input, or agent work begins. Timing is controlled in `logo-animation.ts` by `ENTRANCE_FPS`, `ENTRANCE_INTERVAL_MS`, `DOT_BUILD_END_FRAME`, `ARROW_ENTRY_START_FRAME`, and `ARROW_ENTRY_END_FRAME`.
 
