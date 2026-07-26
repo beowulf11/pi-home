@@ -363,6 +363,26 @@ func (s *solver) step(dt float64) {
 
 func (s *solver) raster(width, height int) []byte {
 	out := make([]byte, width*height)
+	// Render the otherwise invisible collision terrain as a restrained,
+	// deterministic grain. The brighter surface ridge keeps the shoreline
+	// readable while the lower-density interior remains visually secondary.
+	widthScale := float64(max(1, width-1))
+	heightScale := float64(max(1, height-1))
+	surfaceBand := 1.5 / heightScale
+	for y := 0; y < height; y++ {
+		worldY := 1 - float64(y)/heightScale
+		for x := 0; x < width; x++ {
+			floor := s.terrainHeight(float64(x) / widthScale)
+			if worldY > floor {
+				continue
+			}
+			grain := byte(72 + ((x*37 + y*61 + x*y*7) % 54))
+			if floor-worldY < surfaceBand {
+				grain = 168
+			}
+			out[y*width+x] = grain
+		}
+	}
 	// Scale particle splats with the simulation cells, not output pixels. A
 	// large terminal therefore shows a continuous body of water instead of
 	// spreading a fixed particle count into nearly invisible isolated dots.

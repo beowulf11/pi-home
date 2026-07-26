@@ -113,6 +113,30 @@ func TestWaterRemainsBoundedAndFiniteAcrossCycles(t *testing.T) {
 	}
 }
 
+func TestRasterFillsInvisibleBeachWithLand(t *testing.T) {
+	s := newSolver(80, 40)
+	s.p = nil // isolate the static terrain layer
+	width, height := 120, 60
+	raster := s.raster(width, height)
+	leftLand, rightLand := 0, 0
+	for y := 0; y < height; y++ {
+		for x := 0; x < 10; x++ {
+			if raster[y*width+x] > 0 {
+				leftLand++
+			}
+			if raster[y*width+width-1-x] > 0 {
+				rightLand++
+			}
+		}
+	}
+	if leftLand == 0 {
+		t.Fatal("flat seabed was not rendered")
+	}
+	if rightLand < leftLand*3 {
+		t.Fatalf("rising beach was not visibly filled: left=%d right=%d", leftLand, rightLand)
+	}
+}
+
 func TestLargeRasterKeepsWaterContinuous(t *testing.T) {
 	s := newSolver(48, 24)
 	raster := s.raster(240, 120)
