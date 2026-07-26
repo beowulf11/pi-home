@@ -7,7 +7,7 @@ Global Pi extension that:
 - regenerates and caches the art when the terminal size or source image changes;
 - chooses a hard-coded intro profile from the Pi session's working directory;
 - plays the Praktik one-shot, dynamically rasterized entrance animation under `~/code/praktik`: SVG components move at fractional-pixel positions inside a clipped viewport, and every complete frame is reconverted to ASCII;
-- plays a background Go PIC/FLIP fluid intro everywhere else, with the procedural wave retained as an immediate/missing-binary fallback;
+- plays a background Go PIC/FLIP fluid intro everywhere else, filling the available header canvas and continuing until agent generation begins, with the procedural wave retained as an immediate/missing-binary fallback;
 - shows a minimal update list directly above the editor only when updates exist, then removes it as soon as input or agent work begins;
 - replaces Pi's built-in version/package update notices to avoid duplicates.
 
@@ -30,7 +30,7 @@ The default intro deliberately separates three layers:
 2. `fluid-transport.ts` owns the persistent child process and line protocol. Pi sends `resize <pixelWidth> <pixelHeight>` and `stop`; Go returns `frame <sequence> <width> <height> <base64 grayscale bytes>`. Only the newest valid complete frame is retained. stderr is drained away from the TUI.
 3. `raster-to-ascii.ts` is pure TypeScript area resampling/density conversion with terminal-cell aspect compensation and optional deterministic temporal hysteresis.
 
-The child is started lazily by the default header's first animated render, never while the extension factory loads. Its initial resize determines the stable physics grid. Later terminal resizes change only raster output dimensions, preserving normalized particle positions and velocity. The existing 60 fps / `ENTRANCE_END_FRAME` lifecycle owns the process: animation completion, user input, agent start, header disposal, and session shutdown stop it idempotently. The last buffered frame remains available for the static header. Praktik profile behavior is unchanged.
+The child is started lazily by the default header's first animated render, never while the extension factory loads. Its initial resize determines the stable physics grid. Later terminal resizes change only raster output dimensions, preserving normalized particle positions and velocity. The fluid canvas uses the complete terminal width and all available terminal rows except the adaptive top/bottom margins and Pi's editor/footer reservation. At 60 fps it continues for as long as the empty intro is idle, then agent start, header disposal, or session shutdown stops it idempotently. The last buffered frame remains available for the static header. The Praktik profile remains a finite entrance animation.
 
 Build, test, and preview locally:
 
@@ -73,7 +73,7 @@ The stored source is trimmed to its visible bounds to avoid wasting output space
 
 Animations run once only for an empty session. For the Praktik profile, `svg-ascii-animation.ts` splits the canonical compound SVG path into its five components, rasterizes those masks once at 4× the target character resolution, moves them with bilinear fractional-pixel sampling inside one fixed clipped rectangle, and converts every full raster back through the same simple or complex density map. Frames are cached by terminal/logo size. This avoids moving rigid ASCII characters between whole cells; edge glyphs evolve as the underlying SVG crosses character boundaries. The old character translator remains only as a fallback if SVG rasterization is unavailable.
 
-The animation immediately completes if the user types, submits input, or agent work begins. Timing is controlled in `logo-animation.ts` by `ENTRANCE_FPS`, `ENTRANCE_INTERVAL_MS`, `DOT_BUILD_END_FRAME`, `ARROW_ENTRY_START_FRAME`, and `ARROW_ENTRY_END_FRAME`.
+The Praktik entrance completes on its normal finite timeline or when agent work begins. The default fluid intro instead loops continuously while the empty session is idle and stops when agent generation begins. Merely typing in the editor does not stop either animation. Timing is controlled in `logo-animation.ts` by `ENTRANCE_FPS`, `ENTRANCE_INTERVAL_MS`, `DOT_BUILD_END_FRAME`, `ARROW_ENTRY_START_FRAME`, and `ARROW_ENTRY_END_FRAME`.
 
 Render every animation frame as `.txt`, `.svg`, and `.png`, plus a PNG contact sheet, with:
 

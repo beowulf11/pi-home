@@ -13,6 +13,7 @@ import {
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { generateDefaultWaveFrames } from "./default-wave-animation.ts";
 import { FluidTransport } from "./fluid-transport.ts";
+import { defaultWaveDimensions, EDITOR_FOOTER_ROWS } from "./intro-layout.ts";
 import { resolveIntroProfile } from "./intro-config.ts";
 import { rasterToAscii } from "./raster-to-ascii.ts";
 import {
@@ -33,7 +34,6 @@ const ASCII_MAP = " .:-=+*#%@";
 const CONVERTER = "ascii-image-converter";
 const DEFAULT_MAX_LOGO_WIDTH = 48;
 const DEFAULT_MAX_LOGO_ROWS = 20;
-const EDITOR_FOOTER_ROWS = 8;
 const MAX_VISIBLE_PACKAGE_UPDATES = 4;
 const LOGO_COLOR = "\x1b[38;2;242;137;84m";
 const RESET_FOREGROUND = "\x1b[39m";
@@ -77,19 +77,6 @@ function logoLimits(terminalWidth: number, terminalRows: number): { width: numbe
 	if (terminalWidth >= 220 && terminalRows >= 70) return { width: 96, rows: 40 };
 	if (terminalWidth >= 140 && terminalRows >= 52) return { width: 72, rows: 30 };
 	return { width: DEFAULT_MAX_LOGO_WIDTH, rows: DEFAULT_MAX_LOGO_ROWS };
-}
-
-function defaultWaveDimensions(
-	terminalWidth: number,
-	terminalRows: number,
-	updateRows: number,
-	margin: number,
-): { width: number; rows: number } {
-	const limits = logoLimits(terminalWidth, terminalRows);
-	const width = Math.min(limits.width, Math.max(8, Math.floor(terminalWidth * 0.65)));
-	const desiredRows = Math.max(5, Math.floor(limits.rows * 0.45));
-	const availableRows = terminalRows - margin * 2 - EDITOR_FOOTER_ROWS - updateRows;
-	return { width, rows: Math.max(2, Math.min(desiredRows, availableRows)) };
 }
 
 function imageToAscii(
@@ -215,7 +202,6 @@ export default async function customIntro(pi: ExtensionAPI) {
 	const hideStartupUpdates = (ctx: ExtensionContext) => {
 		startupUpdatesVisible = false;
 		startupUpdateRows = 0;
-		finishIntroAnimation?.();
 		if (ctx.mode === "tui") ctx.ui.setWidget(UPDATE_WIDGET_KEY, undefined);
 	};
 
@@ -225,6 +211,7 @@ export default async function customIntro(pi: ExtensionAPI) {
 
 	pi.on("agent_start", (_event, ctx) => {
 		hideStartupUpdates(ctx);
+		finishIntroAnimation?.();
 	});
 
 	pi.on("session_shutdown", () => {
@@ -243,12 +230,15 @@ export default async function customIntro(pi: ExtensionAPI) {
 		const introProfile = resolveIntroProfile(ctx.cwd);
 
 		ctx.ui.setHeader((tui, _theme) => {
+			const continuouslyAnimate = shouldAnimate && introProfile.animation === "default-wave";
+			let animationActive = shouldAnimate;
 			let entranceFrame = shouldAnimate ? 0 : ENTRANCE_END_FRAME;
 			let timer: ReturnType<typeof setInterval> | undefined;
 			let disposed = false;
 			let fluidTransport: FluidTransport | undefined;
 			let fluidAscii: { sequence: number; width: number; rows: number; lines: string[] } | undefined;
 			const finish = () => {
+				animationActive = false;
 				if (timer) clearInterval(timer);
 				timer = undefined;
 				entranceFrame = ENTRANCE_END_FRAME;
@@ -258,16 +248,14 @@ export default async function customIntro(pi: ExtensionAPI) {
 			finishIntroAnimation = finish;
 			if (shouldAnimate) {
 				timer = setInterval(() => {
-					if (ctx.ui.getEditorText().length > 0) {
-						finish();
-						return;
-					}
 					entranceFrame += 1;
-					if (entranceFrame >= ENTRANCE_END_FRAME) {
+					if (!continuouslyAnimate && entranceFrame >= ENTRANCE_END_FRAME) {
 						finish();
 						return;
 					}
-					tui.requestRender();
+					// The Go process drives renders once fluid frames arrive. Keep this
+					// timer only as the one-shot logo clock or procedural-wave fallback.
+					if (!continuouslyAnimate || !fluidTransport?.latestFrame) tui.requestRender();
 				}, ENTRANCE_INTERVAL_MS);
 				timer.unref?.();
 			}
@@ -305,12 +293,12 @@ export default async function customIntro(pi: ExtensionAPI) {
 					animationFrames = cachedAnimation.frames;
 					art = animationFrames.at(-1) ?? ["~"];
 
-					if (shouldAnimate && entranceFrame < ENTRANCE_END_FRAME) {
+					if (continuouslyAnimate && animationActive) {
 						const pixelWidth = dimensions.width;
 						const pixelHeight = dimensions.rows * 2;
 						if (!fluidTransport) {
 							fluidTransport = new FluidTransport(FLUID_EXECUTABLE, () => {
-								if (!disposed && entranceFrame < ENTRANCE_END_FRAME) tui.requestRender();
+								if (!disposed && animationActive) tui.requestRender();
 							});
 							fluidTransport.start(pixelWidth, pixelHeight);
 						} else {
@@ -352,9 +340,10 @@ export default async function customIntro(pi: ExtensionAPI) {
 				let renderedArt = art;
 				if (shouldAnimate) {
 					if (introProfile.animation === "default-wave") {
-						renderedArt = fluidAscii?.lines ?? animationFrames?.[
-							Math.min(entranceFrame, (animationFrames?.length ?? 1) - 1)
-						] ?? art;
+						const fallbackFrame = animationFrames && animationFrames.length > 0
+							? entranceFrame % animationFrames.length
+							: 0;
+						renderedArt = fluidAscii?.lines ?? animationFrames?.[fallbackFrame] ?? art;
 					} else if (converted) {
 						try {
 							const logoMtime = statSync(join(EXTENSION_DIR, "logo.svg")).mtimeMs;
