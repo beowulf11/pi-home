@@ -12,7 +12,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { generateDefaultWaveFrames } from "./default-wave-animation.ts";
+import { FluidTransport } from "./fluid-transport.ts";
 import { resolveIntroProfile } from "./intro-config.ts";
+import { rasterToAscii } from "./raster-to-ascii.ts";
 import {
 	animateLogoEntrance,
 	ENTRANCE_END_FRAME,
@@ -23,6 +25,7 @@ import { generateSvgAsciiFrames } from "./svg-ascii-animation.ts";
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const SOURCE_PATH = join(EXTENSION_DIR, "source.png");
 const FALLBACK_PATH = join(EXTENSION_DIR, "ascii-art.txt");
+const FLUID_EXECUTABLE = join(EXTENSION_DIR, "bin", "fluid-intro");
 const UPDATE_WIDGET_KEY = "custom-intro-updates";
 const PI_RELEASE_URL = "https://pi.dev/api/latest-version";
 const UPDATE_TIMEOUT_MS = 10_000;
@@ -224,6 +227,11 @@ export default async function customIntro(pi: ExtensionAPI) {
 		hideStartupUpdates(ctx);
 	});
 
+	pi.on("session_shutdown", () => {
+		finishIntroAnimation?.();
+		finishIntroAnimation = undefined;
+	});
+
 	pi.on("session_start", (_event, ctx) => {
 		if (ctx.mode !== "tui") return;
 		startupUpdatesVisible = true;
@@ -237,11 +245,15 @@ export default async function customIntro(pi: ExtensionAPI) {
 		ctx.ui.setHeader((tui, _theme) => {
 			let entranceFrame = shouldAnimate ? 0 : ENTRANCE_END_FRAME;
 			let timer: ReturnType<typeof setInterval> | undefined;
+			let disposed = false;
+			let fluidTransport: FluidTransport | undefined;
+			let fluidAscii: { sequence: number; width: number; rows: number; lines: string[] } | undefined;
 			const finish = () => {
 				if (timer) clearInterval(timer);
 				timer = undefined;
 				entranceFrame = ENTRANCE_END_FRAME;
-				tui.requestRender();
+				fluidTransport?.stop();
+				if (!disposed) tui.requestRender();
 			};
 			finishIntroAnimation = finish;
 			if (shouldAnimate) {
@@ -292,6 +304,38 @@ export default async function customIntro(pi: ExtensionAPI) {
 					}
 					animationFrames = cachedAnimation.frames;
 					art = animationFrames.at(-1) ?? ["~"];
+
+					if (shouldAnimate && entranceFrame < ENTRANCE_END_FRAME) {
+						const pixelWidth = dimensions.width;
+						const pixelHeight = dimensions.rows * 2;
+						if (!fluidTransport) {
+							fluidTransport = new FluidTransport(FLUID_EXECUTABLE, () => {
+								if (!disposed && entranceFrame < ENTRANCE_END_FRAME) tui.requestRender();
+							});
+							fluidTransport.start(pixelWidth, pixelHeight);
+						} else {
+							fluidTransport.resize(pixelWidth, pixelHeight);
+						}
+					}
+					const latest = fluidTransport?.latestFrame;
+					if (latest && (latest.sequence !== fluidAscii?.sequence
+						|| dimensions.width !== fluidAscii.width
+						|| dimensions.rows !== fluidAscii.rows)) {
+						fluidAscii = {
+							sequence: latest.sequence,
+							width: dimensions.width,
+							rows: dimensions.rows,
+							lines: rasterToAscii(
+								latest.pixels,
+								latest.width,
+								latest.height,
+								dimensions.width,
+								dimensions.rows,
+								{ previous: fluidAscii?.lines },
+							),
+						};
+					}
+					if (fluidAscii) art = fluidAscii.lines;
 				}
 
 				const reservedRows = EDITOR_FOOTER_ROWS + startupUpdateRows;
@@ -308,7 +352,7 @@ export default async function customIntro(pi: ExtensionAPI) {
 				let renderedArt = art;
 				if (shouldAnimate) {
 					if (introProfile.animation === "default-wave") {
-						renderedArt = animationFrames?.[
+						renderedArt = fluidAscii?.lines ?? animationFrames?.[
 							Math.min(entranceFrame, (animationFrames?.length ?? 1) - 1)
 						] ?? art;
 					} else if (converted) {
@@ -346,7 +390,9 @@ export default async function customIntro(pi: ExtensionAPI) {
 				cachedAnimation = undefined;
 			},
 			dispose() {
+				disposed = true;
 				finish();
+				fluidTransport?.dispose();
 				if (finishIntroAnimation === finish) finishIntroAnimation = undefined;
 			},
 		};

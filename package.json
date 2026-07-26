@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build:fluid": "mkdir -p bin && go build -C fluid -o ../bin/fluid-intro .",
+    "preview:fluid": "npm run build:fluid && node scripts/preview-fluid.ts",
+    "test": "node --test *.test.ts",
+    "test:fluid": "go test -C fluid ./...",
     "render-frames": "node scripts/render-animation-frames.ts"
   }
 }
