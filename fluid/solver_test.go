@@ -51,6 +51,28 @@ func TestWaveMakerPeriodicallyAddsEnergy(t *testing.T) {
 	}
 }
 
+func TestBeachRisesOnRightAndReceivesBreakingWave(t *testing.T) {
+	s := newSolver(100, 52)
+	if s.terrainHeight(.5) >= s.terrainHeight(.85) || s.terrainHeight(.85) >= s.terrainHeight(1) {
+		t.Fatal("right-hand beach does not rise toward the shoreline")
+	}
+	for frame := 0; frame < wavePeriodFrames; frame++ {
+		s.step(1.0 / 60)
+	}
+	runup := 0
+	for _, p := range s.p {
+		if p.y < s.terrainHeight(p.x) {
+			t.Fatalf("particle entered beach: %+v", p)
+		}
+		if p.x > .78 && p.y > waterSurface+.03 {
+			runup++
+		}
+	}
+	if runup == 0 {
+		t.Fatal("incoming swell never ran up the beach")
+	}
+}
+
 func TestWaterRemainsBoundedAndFiniteAcrossCycles(t *testing.T) {
 	s := newSolver(48, 24)
 	particleCount := len(s.p)
@@ -63,7 +85,7 @@ func TestWaterRemainsBoundedAndFiniteAcrossCycles(t *testing.T) {
 	for _, p := range s.p {
 		if math.IsNaN(p.x) || math.IsNaN(p.y) || math.IsNaN(p.vx) || math.IsNaN(p.vy) ||
 			math.IsInf(p.x, 0) || math.IsInf(p.y, 0) || math.IsInf(p.vx, 0) || math.IsInf(p.vy, 0) ||
-			p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1 {
+			p.x < 0 || p.x > 1 || p.y < s.terrainHeight(p.x) || p.y > 1 {
 			t.Fatalf("invalid particle after sustained run: %+v", p)
 		}
 	}
@@ -76,6 +98,18 @@ func TestWaterRemainsBoundedAndFiniteAcrossCycles(t *testing.T) {
 	}
 	if visible < len(raster)/10 {
 		t.Fatalf("water visually collapsed after sustained run: %d/%d pixels", visible, len(raster))
+	}
+	for frame := 0; frame < wavePulseFrames/2; frame++ {
+		s.step(1.0 / 60)
+	}
+	moving := 0
+	for _, p := range s.p {
+		if math.Hypot(p.vx, p.vy) > .03 {
+			moving++
+		}
+	}
+	if moving < len(s.p)/5 {
+		t.Fatalf("periodic swell did not reactivate settled water: %d/%d particles moving", moving, len(s.p))
 	}
 }
 

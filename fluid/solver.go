@@ -9,9 +9,12 @@ package main
 import "math"
 
 const (
-	wavePeriodFrames = 240 // one impulse every four seconds at 60 fps
-	wavePulseFrames  = 48  // smooth 0.8 second push
-	maxParticleSpeed = 1.75
+	wavePeriodFrames = 180 // one incoming swell every three seconds at 60 fps
+	wavePulseFrames  = 90  // broad 1.5 second push keeps waves overlapping
+	maxParticleSpeed = 2.25
+	waterSurface     = .31
+	beachStart       = .68
+	beachTop         = .36
 )
 
 type particle struct{ x, y, vx, vy float64 }
@@ -33,11 +36,16 @@ func newSolver(pixelWidth, pixelHeight int) *solver {
 	s.v = make([]float64, nx*(ny+1))
 	s.oldV = make([]float64, len(s.v))
 	s.weightV = make([]float64, len(s.v))
-	// Deterministic dam-break, four particles per occupied cell.
+	// A settled ocean spans the tank and meets an invisible rising beach on the
+	// right. Four markers per wet cell preserve enough detail for breaking waves.
 	for y := 1; y < ny-2; y++ {
-		for x := 1; x < nx/2; x++ {
+		for x := 1; x < nx-1; x++ {
 			for _, o := range [][2]float64{{.27, .27}, {.73, .27}, {.27, .73}, {.73, .73}} {
-				s.p = append(s.p, particle{x: (float64(x) + o[0]) / float64(nx), y: (float64(y) + o[1]) / float64(ny), vx: .08 * math.Sin(float64(y)*.7)})
+				px := (float64(x) + o[0]) / float64(nx)
+				py := (float64(y) + o[1]) / float64(ny)
+				if py > s.terrainHeight(px)+.15/float64(ny) && py < waterSurface {
+					s.p = append(s.p, particle{x: px, y: py})
+				}
 			}
 		}
 	}
@@ -89,6 +97,28 @@ func (s *solver) sampleVelocity(x, y float64, u, v []float64) (float64, float64)
 	return sample(u, s.nx+1, s.ny, x*float64(s.nx), y*float64(s.ny)-.5), sample(v, s.nx, s.ny+1, x*float64(s.nx)-.5, y*float64(s.ny))
 }
 
+func (s *solver) terrainHeight(x float64) float64 {
+	base := 1.2 / float64(s.ny)
+	t := math.Max(0, math.Min(1, (x-beachStart)/(1-beachStart)))
+	// Smoothstep avoids a sharp corner where the flat seabed meets the beach.
+	t = t * t * (3 - 2*t)
+	return base + (beachTop-base)*t
+}
+
+func (s *solver) terrainSlope(x float64) float64 {
+	t := math.Max(0, math.Min(1, (x-beachStart)/(1-beachStart)))
+	return (beachTop - 1.2/float64(s.ny)) * 6 * t * (1 - t) / (1 - beachStart)
+}
+
+func (s *solver) solidCell(x, y int) bool {
+	if x < 0 || x >= s.nx || y < 0 || y >= s.ny {
+		return true
+	}
+	cx := (float64(x) + .5) / float64(s.nx)
+	cy := (float64(y) + .5) / float64(s.ny)
+	return cy < s.terrainHeight(cx)
+}
+
 // applyWaveMaker supplies energy that numerical damping would otherwise remove.
 // A smooth pulse near the left wall periodically pushes the pool rightward and
 // slightly upward, producing a repeating wave without creating/removing water.
@@ -100,12 +130,12 @@ func (s *solver) applyWaveMaker(dt float64) bool {
 	envelope := math.Sin(math.Pi * (float64(phase) + .5) / wavePulseFrames)
 	for i := range s.p {
 		p := &s.p[i]
-		if p.x >= .24 {
+		if p.x >= .28 {
 			continue
 		}
-		influence := 1 - p.x/.24
-		p.vx += 1.8 * envelope * influence * dt
-		p.vy += .32 * envelope * influence * dt
+		influence := 1 - p.x/.28
+		p.vx += 3.2 * envelope * influence * dt
+		p.vy += .62 * envelope * influence * dt
 	}
 	return true
 }
@@ -154,10 +184,10 @@ func (s *solver) separateParticles() {
 		}
 	}
 	horizontalMargin := 1.2 / float64(s.nx)
-	verticalMargin := 1.2 / float64(s.ny)
 	for i := range s.p {
 		s.p[i].x = math.Max(horizontalMargin, math.Min(1-horizontalMargin, s.p[i].x))
-		s.p[i].y = math.Max(verticalMargin, math.Min(1-verticalMargin, s.p[i].y))
+		floor := s.terrainHeight(s.p[i].x) + .15/float64(s.ny)
+		s.p[i].y = math.Max(floor, math.Min(1-1.2/float64(s.ny), s.p[i].y))
 	}
 }
 
@@ -195,14 +225,38 @@ func (s *solver) step(dt float64) {
 		s.v[s.vi(x, 0)] = 0
 		s.v[s.vi(x, s.ny)] = 0
 	}
-	// Incompressibility projection on the staggered MAC grid.
+	// Incompressibility projection on the staggered MAC grid. The rising
+	// right-hand seabed is a solid Neumann boundary; air remains zero pressure.
 	pressure := make([]float64, s.nx*s.ny)
 	next := make([]float64, len(pressure))
 	fluid := make([]bool, len(pressure))
+	solid := make([]bool, len(pressure))
+	for y := 0; y < s.ny; y++ {
+		for x := 0; x < s.nx; x++ {
+			solid[y*s.nx+x] = s.solidCell(x, y)
+		}
+	}
 	for _, p := range s.p {
 		x := clamp(int(p.x*float64(s.nx)), 1, s.nx-2)
 		y := clamp(int(p.y*float64(s.ny)), 1, s.ny-2)
-		fluid[y*s.nx+x] = true
+		if !solid[y*s.nx+x] {
+			fluid[y*s.nx+x] = true
+		}
+	}
+	// No velocity may cross a face touching the beach.
+	for y := 0; y < s.ny; y++ {
+		for x := 1; x < s.nx; x++ {
+			if solid[y*s.nx+x-1] || solid[y*s.nx+x] {
+				s.u[s.ui(x, y)] = 0
+			}
+		}
+	}
+	for y := 1; y < s.ny; y++ {
+		for x := 0; x < s.nx; x++ {
+			if solid[(y-1)*s.nx+x] || solid[y*s.nx+x] {
+				s.v[s.vi(x, y)] = 0
+			}
+		}
 	}
 	for iter := 0; iter < 28; iter++ {
 		for y := 1; y < s.ny-1; y++ {
@@ -212,18 +266,28 @@ func (s *solver) step(dt float64) {
 					continue
 				}
 				div := s.u[s.ui(x+1, y)] - s.u[s.ui(x, y)] + s.v[s.vi(x, y+1)] - s.v[s.vi(x, y)]
-				next[i] = (pressure[i-1] + pressure[i+1] + pressure[i-s.nx] + pressure[i+s.nx] - div) / 4
+				sum, count := 0.0, 0.0
+				for _, neighbor := range []int{i - 1, i + 1, i - s.nx, i + s.nx} {
+					if !solid[neighbor] {
+						sum += pressure[neighbor]
+						count++
+					}
+				}
+				if count > 0 {
+					next[i] = (sum - div) / count
+				}
 			}
 		}
 		pressure, next = next, pressure
 	}
 	// Apply each pressure gradient to its shared MAC face exactly once.
-	// Air pressure is zero, which supplies the free-surface boundary.
 	for y := 0; y < s.ny; y++ {
 		for x := 1; x < s.nx; x++ {
 			left := y*s.nx + x - 1
 			right := left + 1
-			if fluid[left] || fluid[right] {
+			if solid[left] || solid[right] {
+				s.u[s.ui(x, y)] = 0
+			} else if fluid[left] || fluid[right] {
 				s.u[s.ui(x, y)] -= pressure[right] - pressure[left]
 			}
 		}
@@ -232,7 +296,9 @@ func (s *solver) step(dt float64) {
 		for x := 0; x < s.nx; x++ {
 			bottom := (y-1)*s.nx + x
 			top := y*s.nx + x
-			if fluid[bottom] || fluid[top] {
+			if solid[bottom] || solid[top] {
+				s.v[s.vi(x, y)] = 0
+			} else if fluid[bottom] || fluid[top] {
 				s.v[s.vi(x, y)] -= pressure[top] - pressure[bottom]
 			}
 		}
@@ -270,13 +336,22 @@ func (s *solver) step(dt float64) {
 			p.x = 1 - margin
 			p.vx = -math.Abs(p.vx) * .25
 		}
-		bottom := 1.2 / float64(s.ny)
-		if p.y < bottom {
-			p.y = bottom
-			p.vy = math.Abs(p.vy) * .15
+		floor := s.terrainHeight(p.x) + .15/float64(s.ny)
+		if p.y < floor {
+			p.y = floor
+			slope := s.terrainSlope(p.x)
+			normalLength := math.Hypot(slope, 1)
+			nx, ny := -slope/normalLength, 1/normalLength
+			intoTerrain := p.vx*nx + p.vy*ny
+			if intoTerrain < 0 {
+				p.vx -= 1.12 * intoTerrain * nx
+				p.vy -= 1.12 * intoTerrain * ny
+			}
+			p.vx *= .88
 		}
-		if p.y > 1-bottom {
-			p.y = 1 - bottom
+		topMargin := 1.2 / float64(s.ny)
+		if p.y > 1-topMargin {
+			p.y = 1 - topMargin
 			p.vy = -math.Abs(p.vy) * .15
 		}
 	}
