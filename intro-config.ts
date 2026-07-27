@@ -10,6 +10,7 @@ export type IntroAnimationId =
 export type GalaxyStyle = "classic" | "living";
 export type GalaxyTransition = "direct" | "comet";
 export type GalaxyEffect = "nebula" | "starfield" | "shooting-stars" | "pulse";
+export type LogoPresentation = "flat" | "rotating-3d";
 
 export interface GalaxyVariant {
 	id: string;
@@ -24,6 +25,8 @@ export interface IntroProfile {
 	roots: string[];
 	/** Presets eligible for this profile. One is picked once per displayed intro. */
 	galaxyVariants?: readonly string[];
+	/** Optional treatment applied after the galaxy gathers into the logo. */
+	logoPresentation?: LogoPresentation;
 }
 
 export const GALAXY_PRESETS: Readonly<Record<string, GalaxyVariant>> = {
@@ -59,12 +62,14 @@ export const INTRO_PROFILES: readonly IntroProfile[] = [
 		animation: "galaxy-logo-on-input",
 		roots: EXPERIMENT_ROOTS,
 		galaxyVariants: DEFAULT_GALAXY_VARIANTS,
+		logoPresentation: "rotating-3d",
 	},
 	{
 		id: "praktik",
 		animation: "galaxy-logo-on-input",
 		roots: [PRAKTIK_ROOT],
 		galaxyVariants: DEFAULT_GALAXY_VARIANTS,
+		logoPresentation: "rotating-3d",
 	},
 ];
 
@@ -73,6 +78,7 @@ export const DEFAULT_INTRO_PROFILE: IntroProfile = {
 	animation: "galaxy-logo-on-input",
 	roots: [],
 	galaxyVariants: DEFAULT_GALAXY_VARIANTS,
+	logoPresentation: "rotating-3d",
 };
 
 function isInsideRoot(cwd: string, root: string): boolean {

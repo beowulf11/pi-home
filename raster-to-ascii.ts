@@ -7,6 +7,22 @@ export interface AsciiOptions {
 }
 
 const DEFAULT_DENSITY = " .:-=+*#%@";
+/**
+ * Fine-grained 3-D ramp. Braille dots, diagonal strokes, and block shades add
+ * intermediate texture while remaining single-column glyphs in terminals.
+ */
+export const EXPRESSIVE_DENSITY = " .'`^\",:;·⠁Il!i⠃><~+_-?][}{1)(|\\/╱╲tfjrx⠇nuvczXYUJCLQ0OZmwqpdbkhao░⠏*#MW▒⠟&8%⠿▓B@⡿█⣿";
+/** Sparse points become stars while dense cores retain block-like weight. */
+export const COSMIC_DENSITY = "  ·˙.⋅:⠁✧⠃*⋆⠇✦░▒▓█⣿";
+
+const SHINY_FACE_DENSITY = " .·˙:;iI1tfLCQ0OZmwqpdbkhao*✦▒▓█⣿";
+const EDGE_DENSITY = " .·┄─╱╲┆│┊┃┏┓┗┛░▒▓█";
+const MATTE_BACK_DENSITY = " .,'`:;!i+?)(/tfjrxnuvczXYUJCLQ0OZmw#░▒▓";
+const LOGO_SURFACE_DENSITIES: Readonly<Record<number, string>> = {
+	32: SHINY_FACE_DENSITY,
+	64: EDGE_DENSITY,
+	96: MATTE_BACK_DENSITY,
+};
 
 function validateRaster(
 	pixels: Uint8Array,
@@ -67,6 +83,45 @@ export function rasterToAscii(
 		lines.push(line);
 	}
 	return lines;
+}
+
+export function remapCometGlyphs(
+	lines: readonly string[],
+	accent: readonly (readonly number[])[],
+): string[] {
+	const sourceGlyphs = [...COSMIC_DENSITY];
+	const tailGlyphs = [..."  ·˙.╲╌╲━✦"];
+	const headGlyphs = [..."  ·•○◉✦✹█⣿"];
+	return lines.map((line, y) => [...line].map((character, x) => {
+		const label = accent[y]?.[x] ?? 0;
+		const targetGlyphs = label === 255 ? headGlyphs : label === 128 ? tailGlyphs : undefined;
+		if (!targetGlyphs) return character;
+		const sourceIndex = sourceGlyphs.indexOf(character);
+		if (sourceIndex < 0) return character;
+		const normalized = sourceIndex / (sourceGlyphs.length - 1);
+		return targetGlyphs[Math.round(normalized * (targetGlyphs.length - 1))] ?? character;
+	}).join(""));
+}
+
+/**
+ * Preserve brightness while assigning a distinct glyph vocabulary to each
+ * projected 3-D surface: polished face, structural edge, and matte reverse.
+ */
+export function remap3dSurfaceGlyphs(
+	lines: readonly string[],
+	surfaces: readonly (readonly number[])[],
+	sourceDensity = EXPRESSIVE_DENSITY,
+): string[] {
+	const sourceGlyphs = [...sourceDensity];
+	return lines.map((line, y) => [...line].map((character, x) => {
+		const density = LOGO_SURFACE_DENSITIES[surfaces[y]?.[x] ?? 0];
+		if (!density) return character;
+		const sourceIndex = sourceGlyphs.indexOf(character);
+		if (sourceIndex < 0) return character;
+		const targetGlyphs = [...density];
+		const normalized = sourceIndex / (sourceGlyphs.length - 1);
+		return targetGlyphs[Math.round(normalized * (targetGlyphs.length - 1))] ?? character;
+	}).join(""));
 }
 
 /** Resample a 0/255 material raster onto the same terminal-cell grid. */

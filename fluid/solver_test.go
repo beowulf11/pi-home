@@ -354,6 +354,115 @@ func TestLogoTargetRetainsAspectAcrossViewports(t *testing.T) {
 	}
 }
 
+func TestLogoRotationLingersAtFrontAndBack(t *testing.T) {
+	s := newSolver(80, 48)
+	s.logoAngle = 0
+	s.advanceLogoRotation(.1)
+	frontStep := s.logoAngle
+	s.logoAngle = math.Pi / 2
+	s.advanceLogoRotation(.1)
+	edgeStep := s.logoAngle - math.Pi/2
+	s.logoAngle = math.Pi
+	s.advanceLogoRotation(.1)
+	backStep := s.logoAngle - math.Pi
+	if edgeStep < frontStep*4.9 || math.Abs(frontStep-backStep) > 1e-9 {
+		t.Fatalf("rotation did not linger symmetrically: front=%f edge=%f back=%f", frontStep, edgeStep, backStep)
+	}
+}
+
+func TestRotatingLogoKeepsCenterAndChangesProjection(t *testing.T) {
+	projected, depth := projectLogoPoint(point{}, 0, math.Pi/3, 100)
+	if projected != (point{}) || depth != 0 {
+		t.Fatalf("center pivot moved: projected=%+v depth=%f", projected, depth)
+	}
+
+	source, err := loadLogoSource("../source.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const width, height = 80, 48
+	s := newSolver(width, height)
+	s.setLogoTarget(source.target(width, height, 48, 40), width, height)
+	front, frontLand, frontSurfaces := s.rasterRotatingLogo(width, height, 0)
+	quarter, quarterLand, quarterSurfaces := s.rasterRotatingLogo(width, height, math.Pi/2)
+	if len(front) != width*height || len(quarter) != len(front) ||
+		len(frontLand) != len(front) || len(quarterLand) != len(front) ||
+		len(frontSurfaces) != len(front) || len(quarterSurfaces) != len(front) {
+		t.Fatal("rotating logo returned invalid raster dimensions")
+	}
+	if bytes.Equal(front, quarter) {
+		t.Fatal("quarter turn did not alter the projected logo")
+	}
+	seenSurfaces := map[byte]bool{}
+	for _, label := range quarterSurfaces {
+		seenSurfaces[label] = true
+	}
+	if !seenSurfaces[logoSurfaceFront] || !seenSurfaces[logoSurfaceEdge] {
+		t.Fatalf("angled projection lacks face/edge labels: %#v", seenSurfaces)
+	}
+	for _, raster := range [][]byte{front, quarter} {
+		visible := 0
+		for _, value := range raster {
+			if value > 0 {
+				visible++
+			}
+		}
+		if visible == 0 {
+			t.Fatal("3-D projection disappeared")
+		}
+	}
+}
+
+func TestRotatingGatherUsesTheCurrentProjectedLogo(t *testing.T) {
+	source, err := loadLogoSource("../source.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const width, height = 80, 48
+	s := newSolver(width, height)
+	s.initializeGalaxy(galaxyLiving)
+	s.setLogoTarget(source.target(width, height, 48, 40), width, height)
+	angle := math.Pi / 3
+	_, _, initialSurfaces := s.rasterRotatingGather(width, height, 0, angle)
+	for _, label := range initialSurfaces {
+		if label != 0 {
+			t.Fatal("surface glyph labels appeared before the projected logo")
+		}
+	}
+	s.stepRotatingLogoGather(1.0/60, 1, angle)
+	gather, _, gatherSurfaces := s.rasterRotatingGather(width, height, 1, angle)
+	projected, _, projectedSurfaces := s.rasterRotatingLogo(width, height, angle)
+	if !bytes.Equal(gather, projected) {
+		t.Fatal("completed gather did not preserve the rotating projection")
+	}
+	for index, value := range projected {
+		if value > 0 && gatherSurfaces[index] != projectedSurfaces[index] {
+			t.Fatalf("visible projected surface changed at pixel %d", index)
+		}
+	}
+	flat, _ := s.rasterLogo(width, height)
+	if bytes.Equal(gather, flat) {
+		t.Fatal("rotating gather fell back to the static logo")
+	}
+}
+
+func TestRotatingLogoParticleProjectionIsFiniteAndBounded(t *testing.T) {
+	source, err := loadLogoSource("../source.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const width, height = 80, 48
+	s := newSolver(width, height)
+	s.setLogoTarget(source.target(width, height, 48, 40), width, height)
+	s.placeParticlesOnRotatingLogo(math.Pi / 2)
+	for _, particle := range s.p {
+		if math.IsNaN(particle.x) || math.IsNaN(particle.y) || math.IsInf(particle.x, 0) ||
+			math.IsInf(particle.y, 0) || particle.x < 0 || particle.x > 1 || particle.y < 0 || particle.y > 1 {
+			t.Fatalf("invalid projected particle: %+v", particle)
+		}
+	}
+}
+
 func TestFluidLogoGatherConvergesOnResponsiveTarget(t *testing.T) {
 	source, err := loadLogoSource("../source.png")
 	if err != nil {

@@ -22,7 +22,9 @@ func main() {
 	galaxyStyleName := flag.String("galaxy-style", "", "galaxy visual module: classic or living")
 	transitionEffect := flag.String("transition-effect", "", "input transition module: direct or comet")
 	galaxyEffectsName := flag.String("galaxy-effects", "", "comma-separated galaxy overlays: nebula, starfield, shooting-stars, pulse")
+	logoPresentation := flag.String("logo-presentation", "flat", "settled logo treatment: flat or rotating-3d")
 	flag.Parse()
+	rotatingLogo := *logoPresentation == "rotating-3d"
 	if *galaxyStyleName == "" {
 		if *mode == "galaxy-logo-on-input" {
 			*galaxyStyleName = "living"
@@ -93,6 +95,9 @@ func main() {
 				if *mode == "galaxy-logo-on-input" && s != nil && !s.liquidationInitialized {
 					// A submitted message liquidates whatever the intro currently shows:
 					// orbiting galaxy, comet/impact, gathering particles, or settled logo.
+					if rotatingLogo && experimentState == "settled" {
+						s.placeParticlesOnRotatingLogo(s.logoAngle)
+					}
 					s.beginLiquidation()
 					experimentState = "liquidate"
 					liquidated = true
@@ -134,8 +139,14 @@ func main() {
 					phase = "galaxy"
 				} else if s.sequence < experimentGalaxyFrames+experimentGatherFrames {
 					progress := float64(s.sequence-experimentGalaxyFrames) / float64(experimentGatherFrames-1)
-					s.stepLogoGather(1.0/60, progress)
-					pixels, land = s.rasterGather(width, height, progress)
+					if rotatingLogo {
+						s.advanceLogoRotation(1.0 / 60)
+						s.stepRotatingLogoGather(1.0/60, progress, s.logoAngle)
+						pixels, land, accent = s.rasterRotatingGather(width, height, progress, s.logoAngle)
+					} else {
+						s.stepLogoGather(1.0/60, progress)
+						pixels, land = s.rasterGather(width, height, progress)
+					}
 					phase = "gather"
 				} else {
 					experimentState = "settled"
@@ -184,8 +195,14 @@ func main() {
 					}
 				case "gather":
 					progress := float64(experimentFrame) / float64(experimentGatherFrames-1)
-					s.stepLogoGather(1.0/60, progress)
-					pixels, land = s.rasterGather(width, height, progress)
+					if rotatingLogo {
+						s.advanceLogoRotation(1.0 / 60)
+						s.stepRotatingLogoGather(1.0/60, progress, s.logoAngle)
+						pixels, land, accent = s.rasterRotatingGather(width, height, progress, s.logoAngle)
+					} else {
+						s.stepLogoGather(1.0/60, progress)
+						pixels, land = s.rasterGather(width, height, progress)
+					}
 					phase = "gather"
 					experimentFrame++
 					if experimentFrame >= experimentGatherFrames {
@@ -194,15 +211,23 @@ func main() {
 				}
 			}
 			if experimentState == "settled" && phase == "" {
-				if !settledDirty {
-					continue
-				}
-				settledDirty = false
-				s.sequence++
-				if liquidated {
-					pixels, land = s.rasterLiquid(width, height)
+				if rotatingLogo && !liquidated {
+					// Unlike the flat logo, the 3-D treatment stays live so the /tmp
+					// experiment continues orbiting until input liquidates it.
+					s.advanceLogoRotation(1.0 / 60)
+					s.sequence++
+					pixels, land, accent = s.rasterRotatingLogo(width, height, s.logoAngle)
 				} else {
-					pixels, land = s.rasterLogo(width, height)
+					if !settledDirty {
+						continue
+					}
+					settledDirty = false
+					s.sequence++
+					if liquidated {
+						pixels, land = s.rasterLiquid(width, height)
+					} else {
+						pixels, land = s.rasterLogo(width, height)
+					}
 				}
 				phase = "settled"
 			}

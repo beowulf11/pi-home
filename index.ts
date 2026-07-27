@@ -15,7 +15,14 @@ import { generateDefaultWaveFrames } from "./default-wave-animation.ts";
 import { FluidTransport } from "./fluid-transport.ts";
 import { defaultWaveDimensions, EDITOR_FOOTER_ROWS } from "./intro-layout.ts";
 import { resolveGalaxyVariant, resolveIntroProfile } from "./intro-config.ts";
-import { rasterToAccentMask, rasterToAscii, rasterToLandMask } from "./raster-to-ascii.ts";
+import {
+	COSMIC_DENSITY,
+	rasterToAccentMask,
+	rasterToAscii,
+	rasterToLandMask,
+	remap3dSurfaceGlyphs,
+	remapCometGlyphs,
+} from "./raster-to-ascii.ts";
 import {
 	animateLogoEntrance,
 	ENTRANCE_END_FRAME,
@@ -390,6 +397,7 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 										galaxyStyle: galaxyVariant.style,
 										transitionEffect: galaxyVariant.transition,
 										galaxyEffects: galaxyVariant.effects,
+										logoPresentation: introProfile.logoPresentation,
 									}
 									: {},
 							);
@@ -408,18 +416,37 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 					if (latest && latestMatchesViewport && (latest.sequence !== fluidAscii?.sequence
 						|| dimensions.width !== fluidAscii.width
 						|| dimensions.rows !== fluidAscii.rows)) {
+						const expressive3d = introProfile.logoPresentation === "rotating-3d"
+							&& (latest.phase === "gather" || latest.phase === "settled") && !liquidView;
+						// Keep one base ramp across the whole galaxy → logo sequence. Only
+						// cells carrying a projected logo-surface label change vocabulary.
+						const cosmic = introProfile.logoPresentation === "rotating-3d" && !liquidView
+							&& latest.phase !== "liquidate";
+						const accent = rasterToAccentMask(
+							latest.accent,
+							latest.width,
+							latest.height,
+							dimensions.width,
+							dimensions.rows,
+						);
+						const lines = rasterToAscii(
+							latest.pixels,
+							latest.width,
+							latest.height,
+							dimensions.width,
+							dimensions.rows,
+							{
+								previous: fluidAscii?.lines,
+								density: cosmic ? COSMIC_DENSITY : undefined,
+							},
+						);
 						fluidAscii = {
 							sequence: latest.sequence,
 							width: dimensions.width,
 							rows: dimensions.rows,
-							lines: rasterToAscii(
-								latest.pixels,
-								latest.width,
-								latest.height,
-								dimensions.width,
-								dimensions.rows,
-								{ previous: fluidAscii?.lines },
-							),
+							lines: expressive3d
+								? remap3dSurfaceGlyphs(lines, accent, COSMIC_DENSITY)
+								: latest.phase === "comet" ? remapCometGlyphs(lines, accent) : lines,
 							land: rasterToLandMask(
 								latest.land,
 								latest.width,
@@ -427,13 +454,7 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 								dimensions.width,
 								dimensions.rows,
 							),
-							accent: rasterToAccentMask(
-								latest.accent,
-								latest.width,
-								latest.height,
-								dimensions.width,
-								dimensions.rows,
-							),
+							accent,
 						};
 					}
 					if (fluidAscii) art = fluidAscii.lines;

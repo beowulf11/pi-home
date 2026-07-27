@@ -31,7 +31,7 @@ type solver struct {
 	galaxy                             []galaxyParticle
 	galaxyStyle                        galaxyStyle
 	galaxyEffects                      galaxyEffect
-	galaxyTime                         float64
+	galaxyTime, logoAngle              float64
 	experimentInitialized              bool
 	galaxyImpactApplied                bool
 	liquidationInitialized             bool

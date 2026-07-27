@@ -1,5 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { GalaxyEffect, GalaxyStyle, GalaxyTransition } from "./intro-config.ts";
+import type {
+	GalaxyEffect,
+	GalaxyStyle,
+	GalaxyTransition,
+	LogoPresentation,
+} from "./intro-config.ts";
 
 export type FluidPhase = "ocean" | "galaxy" | "comet" | "impact" | "gather" | "liquidate" | "settled";
 
@@ -10,7 +15,7 @@ export interface FluidFrame {
 	pixels: Uint8Array;
 	/** 255 for visible land, 0 for water/air at each source pixel. */
 	land: Uint8Array;
-	/** 0 for normal art, 128 for comet tail, 255 for comet head. */
+	/** 32/64/96 label 3-D front/edge/back; 128/255 label comet tail/head. */
 	accent: Uint8Array;
 	phase?: FluidPhase;
 }
@@ -22,6 +27,7 @@ export interface FluidTransportOptions {
 	galaxyStyle?: GalaxyStyle;
 	transitionEffect?: GalaxyTransition;
 	galaxyEffects?: readonly GalaxyEffect[];
+	logoPresentation?: LogoPresentation;
 }
 
 export function parseFrameLine(line: string): FluidFrame | undefined {
@@ -86,6 +92,9 @@ export class FluidTransport {
 			if (this.options.transitionEffect) args.push("--transition-effect", this.options.transitionEffect);
 			if (this.options.galaxyEffects?.length) {
 				args.push("--galaxy-effects", this.options.galaxyEffects.join(","));
+			}
+			if (this.options.logoPresentation) {
+				args.push("--logo-presentation", this.options.logoPresentation);
 			}
 			const child = spawn(this.executable, args, { stdio: ["pipe", "pipe", "pipe"] });
 			this.child = child;

@@ -21,6 +21,10 @@ const (
 	liquidationMaxFrames          = 420
 	liquidationStableFrames       = 30
 	liquidationStableSpeed        = .04
+	logoRotationRadiansPerSecond  = 2 * math.Pi / 8
+	logoSurfaceFront              = byte(32)
+	logoSurfaceEdge               = byte(64)
+	logoSurfaceBack               = byte(96)
 )
 
 type point struct{ x, y float64 }
@@ -683,7 +687,52 @@ func smoothstep(value float64) float64 {
 // flow. Early motion retains momentum and adds curl; late motion becomes a
 // critically damped approach to the exact SVG-derived destinations.
 func (s *solver) stepLogoGather(dt, progress float64) {
-	if len(s.targets) != len(s.p) {
+	s.stepLogoGatherToward(dt, progress, s.targets)
+}
+
+func (s *solver) rotatingLogoTargets(angle float64) []point {
+	if len(s.targets) != len(s.p) || s.targetWidth < 2 || s.targetHeight < 2 {
+		return nil
+	}
+	minX, minY, maxX, maxY, ok := s.logoBounds()
+	if !ok {
+		return nil
+	}
+	centerX, centerY := float64(minX+maxX)/2, float64(minY+maxY)/2
+	halfDepth := s.logoDepth() / 2
+	cameraDistance := math.Max(float64(s.targetWidth), float64(s.targetHeight)) * 3.5
+	projectedTargets := make([]point, len(s.targets))
+	for index, target := range s.targets {
+		local := point{
+			x: target.x*float64(s.targetWidth) - .5 - centerX,
+			y: (1-target.y)*float64(s.targetHeight) - .5 - centerY,
+		}
+		z := (hashUnit(index+1201)*2 - 1) * halfDepth
+		projected, _ := projectLogoPoint(local, z, angle, cameraDistance)
+		projectedTargets[index] = point{
+			x: math.Max(0, math.Min(1, (centerX+projected.x)/float64(s.targetWidth-1))),
+			y: math.Max(0, math.Min(1, 1-(centerY+projected.y)/float64(s.targetHeight-1))),
+		}
+	}
+	return projectedTargets
+}
+
+func (s *solver) advanceLogoRotation(dt float64) {
+	// Ease through edge-on views but linger when the mark faces toward or away
+	// from the viewer. The speed remains smooth and never reaches zero.
+	sine := math.Sin(s.logoAngle)
+	// A 30% minimum creates a readable front/back pause; sin² keeps the dwell
+	// broad instead of slowing for only a single perfectly aligned frame.
+	speed := .30 + 1.20*sine*sine
+	s.logoAngle = math.Mod(s.logoAngle+logoRotationRadiansPerSecond*speed*dt, 2*math.Pi)
+}
+
+func (s *solver) stepRotatingLogoGather(dt, progress, angle float64) {
+	s.stepLogoGatherToward(dt, progress, s.rotatingLogoTargets(angle))
+}
+
+func (s *solver) stepLogoGatherToward(dt, progress float64, targets []point) {
+	if len(targets) != len(s.p) {
 		s.sequence++
 		return
 	}
@@ -697,7 +746,7 @@ func (s *solver) stepLogoGather(dt, progress float64) {
 	}
 	for index := range s.p {
 		p := &s.p[index]
-		target := s.targets[index]
+		target := targets[index]
 		if s.galaxyStyle == galaxyLiving && index%9 == 0 && len(s.gatherOrigins) == len(s.p) {
 			origin := s.gatherOrigins[index]
 			overshoot := smoothstep((progress-.50)/.20) * (1 - smoothstep((progress-.86)/.10)) * .10
@@ -736,27 +785,206 @@ func (s *solver) rasterLogo(width, height int) ([]byte, []byte) {
 	return out, make([]byte, width*height)
 }
 
-func (s *solver) rasterGather(width, height int, progress float64) ([]byte, []byte) {
-	if s.galaxyStyle == galaxyClassic {
-		return s.rasterClassicGather(width, height, progress)
+// logoBounds returns the visible target dimensions used to choose an extrusion
+// depth. The depth follows the mark rather than the viewport, so resizes do not
+// make the object look thicker merely because more blank canvas is available.
+func (s *solver) logoBounds() (int, int, int, int, bool) {
+	minX, minY, maxX, maxY := s.targetWidth, s.targetHeight, -1, -1
+	for index, alpha := range s.targetAlpha {
+		if alpha <= 4 {
+			continue
+		}
+		x, y := index%s.targetWidth, index/s.targetWidth
+		minX, minY = min(minX, x), min(minY, y)
+		maxX, maxY = max(maxX, x), max(maxY, y)
 	}
-	// Reuse the selected galaxy renderer so visual modules remain continuous at
-	// the handoff. The canonical target takes over only after particles converge.
-	particleFade := 1 - smoothstep((progress-.78)/.22)
-	out := s.rasterGalaxyParticles(width, height, particleFade)
-	blend := smoothstep((progress - .58) / .42)
-	if width == s.targetWidth && height == s.targetHeight {
-		for index, target := range s.targetAlpha {
-			value := byte(float64(target) * blend)
-			if value > out[index] {
-				out[index] = value
+	return minX, minY, maxX, maxY, maxX >= minX && maxY >= minY
+}
+
+// projectLogoPoint rotates a local 3-D point around the logo's vertical center
+// axis and applies restrained perspective. Returning coordinates relative to
+// the center makes the pivot exact and independently testable.
+func projectLogoPoint(local point, z, angle, cameraDistance float64) (point, float64) {
+	cosine, sine := math.Cos(angle), math.Sin(angle)
+	rotatedX := local.x*cosine + z*sine
+	rotatedZ := -local.x*sine + z*cosine
+	denominator := math.Max(cameraDistance*.25, cameraDistance-rotatedZ)
+	scale := cameraDistance / denominator
+	return point{x: rotatedX * scale, y: local.y * scale}, rotatedZ
+}
+
+func (s *solver) logoDepth() float64 {
+	minX, _, maxX, _, ok := s.logoBounds()
+	if !ok {
+		return 1
+	}
+	return math.Max(1.5, float64(maxX-minX+1)*.09)
+}
+
+func paintProjectedLogoSample(out, surfaces []byte, depths []float64, width, height int, cx, cy, depth, brightness float64, surface byte) {
+	const radius = 1.05
+	for y := int(math.Floor(cy - radius)); y <= int(math.Ceil(cy+radius)); y++ {
+		for x := int(math.Floor(cx - radius)); x <= int(math.Ceil(cx+radius)); x++ {
+			if x < 0 || y < 0 || x >= width || y >= height {
+				continue
+			}
+			coverage := math.Max(0, 1-math.Hypot(float64(x)-cx, float64(y)-cy)/radius)
+			if coverage == 0 {
+				continue
+			}
+			index := y*width + x
+			value := byte(math.Max(0, math.Min(255, brightness*coverage)))
+			if depth > depths[index]+.08 {
+				depths[index], out[index], surfaces[index] = depth, value, surface
+			} else if math.Abs(depth-depths[index]) <= .08 && value > out[index] {
+				out[index], surfaces[index] = value, surface
 			}
 		}
 	}
+}
+
+// rasterRotatingLogo turns the alpha target into a shallow solid: the two logo
+// faces and the boundary walls are projected with a z-buffer and independent
+// lighting. This produces a readable front view, visible thickness edge-on,
+// and a shaded reverse face without requiring a terminal-side 3-D renderer.
+func (s *solver) rasterRotatingLogo(width, height int, angle float64) ([]byte, []byte, []byte) {
+	out := make([]byte, width*height)
+	land := make([]byte, width*height)
+	surfaces := make([]byte, width*height)
+	if width != s.targetWidth || height != s.targetHeight || len(s.targetAlpha) != width*height {
+		return out, land, surfaces
+	}
+	minX, minY, maxX, maxY, ok := s.logoBounds()
+	if !ok {
+		return out, land, surfaces
+	}
+	depths := make([]float64, width*height)
+	for index := range depths {
+		depths[index] = math.Inf(-1)
+	}
+	centerX, centerY := float64(minX+maxX)/2, float64(minY+maxY)/2
+	halfDepth := s.logoDepth() / 2
+	cameraDistance := math.Max(float64(width), float64(height)) * 3.5
+	cosine, sine := math.Cos(angle), math.Sin(angle)
+	paint := func(x, y int, z, shade float64, alpha, surface byte) {
+		local := point{x: float64(x) - centerX, y: float64(y) - centerY}
+		projected, projectedDepth := projectLogoPoint(local, z, angle, cameraDistance)
+		paintProjectedLogoSample(out, surfaces, depths, width, height,
+			centerX+projected.x, centerY+projected.y, projectedDepth, float64(alpha)*shade, surface)
+	}
+	// Far face first is not required by the z-buffer, but makes equal-depth
+	// grazing angles deterministic.
+	for _, face := range []struct {
+		z, shade float64
+		surface  byte
+	}{
+		{-halfDepth, .52 + .48*math.Max(0, -cosine), logoSurfaceBack},
+		{halfDepth, .52 + .48*math.Max(0, cosine), logoSurfaceFront},
+	} {
+		for index, alpha := range s.targetAlpha {
+			if alpha <= 4 {
+				continue
+			}
+			paint(index%width, index/width, face.z, face.shade, alpha, face.surface)
+		}
+	}
+	depthSamples := max(2, int(math.Ceil(halfDepth*2))+1)
+	visible := func(x, y int) bool {
+		return x >= 0 && y >= 0 && x < width && y < height && s.targetAlpha[y*width+x] > 4
+	}
+	for index, alpha := range s.targetAlpha {
+		if alpha <= 4 {
+			continue
+		}
+		x, y := index%width, index/width
+		normalX := 0.0
+		boundary := false
+		if !visible(x-1, y) {
+			normalX--
+			boundary = true
+		}
+		if !visible(x+1, y) {
+			normalX++
+			boundary = true
+		}
+		if !visible(x, y-1) || !visible(x, y+1) {
+			boundary = true
+		}
+		if !boundary {
+			continue
+		}
+		sideShade := .38 + .50*math.Max(0, -normalX*sine)
+		for sample := 0; sample < depthSamples; sample++ {
+			z := -halfDepth + 2*halfDepth*float64(sample)/float64(depthSamples-1)
+			paint(x, y, z, sideShade, alpha, logoSurfaceEdge)
+		}
+	}
+	return out, land, surfaces
+}
+
+// Synchronize the fluid markers with the currently displayed solid before a
+// submitted message applies its one-shot liquidation force. Deterministic depth
+// samples distribute markers through the extrusion and avoid a flat-logo jump.
+func (s *solver) placeParticlesOnRotatingLogo(angle float64) {
+	projectedTargets := s.rotatingLogoTargets(angle)
+	if len(projectedTargets) != len(s.p) {
+		return
+	}
+	for index, target := range projectedTargets {
+		s.p[index].x, s.p[index].y = target.x, target.y
+		s.p[index].vx, s.p[index].vy = 0, 0
+	}
+}
+
+func (s *solver) rasterGather(width, height int, progress float64) ([]byte, []byte) {
+	return s.rasterGatherWithTarget(width, height, progress, s.targetAlpha)
+}
+
+func (s *solver) rasterRotatingGather(width, height int, progress, angle float64) ([]byte, []byte, []byte) {
+	projected, _, surfaces := s.rasterRotatingLogo(width, height, angle)
+	out, land := s.rasterGatherWithTarget(width, height, progress, projected)
+	blend := smoothstep((progress - .58) / .42)
+	for index := range surfaces {
+		// A surface vocabulary starts only when that projected target sample has
+		// actually overtaken the fading galaxy at this pixel. This avoids a mask-
+		// shaped glyph switch on the first gather frame.
+		projectedValue := byte(float64(projected[index]) * blend)
+		if projectedValue == 0 || projectedValue < out[index] {
+			surfaces[index] = 0
+		}
+	}
+	return out, land, surfaces
+}
+
+func (s *solver) rasterGatherWithTarget(width, height int, progress float64, targetAlpha []byte) ([]byte, []byte) {
+	if s.galaxyStyle == galaxyClassic {
+		return s.rasterClassicGatherWithTarget(width, height, progress, targetAlpha)
+	}
+	// Reuse the selected galaxy renderer so visual modules remain continuous at
+	// the handoff. The rotating target takes over only after particles converge.
+	particleFade := 1 - smoothstep((progress-.78)/.22)
+	out := s.rasterGalaxyParticles(width, height, particleFade)
+	blendLogoTarget(out, targetAlpha, smoothstep((progress-.58)/.42))
 	return out, make([]byte, width*height)
 }
 
+func blendLogoTarget(out, targetAlpha []byte, blend float64) {
+	if len(targetAlpha) != len(out) {
+		return
+	}
+	for index, target := range targetAlpha {
+		value := byte(float64(target) * blend)
+		if value > out[index] {
+			out[index] = value
+		}
+	}
+}
+
 func (s *solver) rasterClassicGather(width, height int, progress float64) ([]byte, []byte) {
+	return s.rasterClassicGatherWithTarget(width, height, progress, s.targetAlpha)
+}
+
+func (s *solver) rasterClassicGatherWithTarget(width, height int, progress float64, targetAlpha []byte) ([]byte, []byte) {
 	out := make([]byte, width*height)
 	eased := smoothstep(progress)
 	particleFade := 1 - smoothstep((progress-.82)/.18)
@@ -777,14 +1005,6 @@ func (s *solver) rasterClassicGather(width, height int, progress float64) ([]byt
 	coreRadiusX := math.Max(2, float64(width)*.026)
 	coreRadiusY := math.Max(2, float64(height)*.035)
 	splatMaximum(out, width, height, centerX, centerY, coreRadiusX, coreRadiusY, 255*nucleusFade)
-	blend := smoothstep((progress - .58) / .42)
-	if width == s.targetWidth && height == s.targetHeight {
-		for index, target := range s.targetAlpha {
-			value := byte(float64(target) * blend)
-			if value > out[index] {
-				out[index] = value
-			}
-		}
-	}
+	blendLogoTarget(out, targetAlpha, smoothstep((progress-.58)/.42))
 	return out, make([]byte, width*height)
 }
