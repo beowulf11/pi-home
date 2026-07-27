@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strings"
 )
 
 const (
@@ -25,6 +26,32 @@ const (
 	galaxyClassic galaxyStyle = iota
 	galaxyLiving
 )
+
+type galaxyEffect uint8
+
+const (
+	galaxyNebula galaxyEffect = 1 << iota
+	galaxyStarfield
+	galaxyShootingStars
+	galaxyPulse
+)
+
+func parseGalaxyEffects(value string) galaxyEffect {
+	var effects galaxyEffect
+	for _, name := range strings.Split(value, ",") {
+		switch strings.TrimSpace(name) {
+		case "nebula":
+			effects |= galaxyNebula
+		case "starfield":
+			effects |= galaxyStarfield
+		case "shooting-stars":
+			effects |= galaxyShootingStars
+		case "pulse":
+			effects |= galaxyPulse
+		}
+	}
+	return effects
+}
 
 type galaxyRole byte
 
@@ -339,8 +366,61 @@ func (s *solver) particleBrightness(index int) float64 {
 	return float64(star.brightness) * (1 - amplitude + amplitude*math.Sin(star.twinklePhase+s.galaxyTime*star.twinkleRate))
 }
 
+func (s *solver) rasterGalaxyBackdrop(out []byte, width, height int, intensity float64) {
+	if s.galaxyEffects&galaxyStarfield != 0 {
+		// A fixed deep field with independent slow scintillation gives the galaxy
+		// scale without competing with its moving particle arms.
+		for index := 0; index < width*height; index++ {
+			random := hashUnit(index*19 + 701)
+			if random < .982 {
+				continue
+			}
+			twinkle := .64 + .36*math.Sin(s.galaxyTime*(.5+hashUnit(index+17))+random*31)
+			out[index] = byte(math.Max(0, 112*twinkle*intensity))
+		}
+	}
+	if s.galaxyEffects&galaxyNebula != 0 {
+		// Three broad, breathing clouds combine into a restrained asymmetric haze.
+		breath := .88 + .12*math.Sin(s.galaxyTime*.43)
+		clouds := []struct{ x, y, rx, ry, brightness float64 }{
+			{.34, .43, .23, .19, 42}, {.63, .57, .28, .16, 34}, {.52, .31, .19, .13, 25},
+		}
+		for _, cloud := range clouds {
+			splatMaximum(out, width, height,
+				cloud.x*float64(width-1), cloud.y*float64(height-1),
+				cloud.rx*float64(width), cloud.ry*float64(height),
+				cloud.brightness*breath*intensity)
+		}
+	}
+}
+
+func (s *solver) rasterShootingStars(out []byte, width, height int, intensity float64) {
+	if s.galaxyEffects&galaxyShootingStars == 0 {
+		return
+	}
+	for streak := 0; streak < 3; streak++ {
+		cycle := math.Mod(s.galaxyTime*.22+float64(streak)*.37, 1)
+		if cycle > .26 {
+			continue
+		}
+		progress := cycle / .26
+		startX := .08 + hashUnit(streak+801)*.65
+		startY := .08 + hashUnit(streak+901)*.32
+		for sample := 0; sample < 10; sample++ {
+			lag := float64(sample) * .018
+			t := math.Max(0, progress-lag)
+			strength := (1 - float64(sample)/10) * (1 - smoothstep((progress-.78)/.22))
+			x, y := startX+t*.22, startY+t*.17
+			splatMaximum(out, width, height, x*float64(width-1), y*float64(height-1),
+				math.Max(.8, float64(width)*.004), math.Max(.8, float64(height)*.008),
+				210*strength*intensity)
+		}
+	}
+}
+
 func (s *solver) rasterGalaxyParticles(width, height int, intensity float64) []byte {
 	out := make([]byte, width*height)
+	s.rasterGalaxyBackdrop(out, width, height, intensity)
 	baseRadiusX := math.Max(.7, float64(width)/float64(s.nx)*.3)
 	baseRadiusY := math.Max(.7, float64(height)/float64(s.ny)*.3)
 	if s.galaxyStyle == galaxyLiving {
@@ -382,10 +462,17 @@ func (s *solver) rasterGalaxyParticles(width, height int, intensity float64) []b
 			brightness,
 		)
 	}
+	s.rasterShootingStars(out, width, height, intensity)
 	// A soft bright nucleus anchors the spiral when ASCII resolution is low.
 	centerX, centerY := .5*float64(width-1), .47*float64(height-1)
 	coreRadiusX := math.Max(2, float64(width)*.026)
 	coreRadiusY := math.Max(2, float64(height)*.035)
+	if s.galaxyEffects&galaxyPulse != 0 {
+		pulse := .5 + .5*math.Sin(s.galaxyTime*2.4)
+		splatMaximum(out, width, height, centerX, centerY,
+			coreRadiusX*(1.5+pulse*.9), coreRadiusY*(1.5+pulse*.9),
+			(48+52*pulse)*intensity)
+	}
 	if s.galaxyStyle == galaxyLiving {
 		splatMaximum(out, width, height, centerX, centerY, coreRadiusX*2.2, coreRadiusY*2.2, 92*intensity)
 	}
@@ -405,8 +492,22 @@ func bezierPoint(start, control, end point, progress float64) point {
 	}
 }
 
-func (s *solver) rasterComet(width, height int, progress float64) ([]byte, []byte) {
+func splatLabel(out []byte, width, height int, cx, cy, radiusX, radiusY float64, label byte) {
+	for y := int(math.Floor(cy - radiusY)); y <= int(math.Ceil(cy+radiusY)); y++ {
+		for x := int(math.Floor(cx - radiusX)); x <= int(math.Ceil(cx+radiusX)); x++ {
+			if x < 0 || y < 0 || x >= width || y >= height {
+				continue
+			}
+			if math.Hypot((float64(x)-cx)/radiusX, (float64(y)-cy)/radiusY) <= 1 && label > out[y*width+x] {
+				out[y*width+x] = label
+			}
+		}
+	}
+}
+
+func (s *solver) rasterComet(width, height int, progress float64) ([]byte, []byte, []byte) {
 	out := s.rasterGalaxyParticles(width, height, 1)
+	accent := make([]byte, width*height)
 	start, control, impact := point{x: -.08, y: .91}, point{x: .18, y: .72}, point{x: .5, y: .53}
 	const trailSamples = 22
 	for sample := trailSamples - 1; sample >= 0; sample-- {
@@ -419,11 +520,16 @@ func (s *solver) rasterComet(width, height int, progress float64) ([]byte, []byt
 		}
 		cx := position.x * float64(width-1)
 		cy := (1 - position.y) * float64(height-1)
-		splatMaximum(out, width, height, cx, cy, math.Max(1.2, float64(width)*.012), math.Max(1.5, float64(height)*.025), 245*strength)
+		radiusX, radiusY := math.Max(1.2, float64(width)*.012), math.Max(1.5, float64(height)*.025)
+		splatMaximum(out, width, height, cx, cy, radiusX, radiusY, 245*strength)
+		splatLabel(accent, width, height, cx, cy, radiusX, radiusY, 128)
 	}
 	head := bezierPoint(start, control, impact, progress)
-	splatMaximum(out, width, height, head.x*float64(width-1), (1-head.y)*float64(height-1), math.Max(2, float64(width)*.018), math.Max(2, float64(height)*.035), 255)
-	return out, make([]byte, width*height)
+	headX, headY := head.x*float64(width-1), (1-head.y)*float64(height-1)
+	headRadiusX, headRadiusY := math.Max(2, float64(width)*.018), math.Max(2, float64(height)*.035)
+	splatMaximum(out, width, height, headX, headY, headRadiusX, headRadiusY, 255)
+	splatLabel(accent, width, height, headX, headY, headRadiusX, headRadiusY, 255)
+	return out, make([]byte, width*height), accent
 }
 
 func (s *solver) beginGalaxyImpact() {

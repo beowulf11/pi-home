@@ -14,8 +14,8 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { generateDefaultWaveFrames } from "./default-wave-animation.ts";
 import { FluidTransport } from "./fluid-transport.ts";
 import { defaultWaveDimensions, EDITOR_FOOTER_ROWS } from "./intro-layout.ts";
-import { resolveIntroProfile } from "./intro-config.ts";
-import { rasterToAscii, rasterToLandMask } from "./raster-to-ascii.ts";
+import { resolveGalaxyVariant, resolveIntroProfile } from "./intro-config.ts";
+import { rasterToAccentMask, rasterToAscii, rasterToLandMask } from "./raster-to-ascii.ts";
 import {
 	animateLogoEntrance,
 	ENTRANCE_END_FRAME,
@@ -37,6 +37,8 @@ const DEFAULT_MAX_LOGO_ROWS = 20;
 const MAX_VISIBLE_PACKAGE_UPDATES = 4;
 const LOGO_COLOR = "\x1b[38;2;242;137;84m";
 const LAND_COLOR = "\x1b[38;2;214;181;110m";
+const COMET_TAIL_COLOR = "\x1b[38;2;210;24;48m";
+const COMET_HEAD_COLOR = "\x1b[38;2;255;82;36m";
 const RESET_FOREGROUND = "\x1b[39m";
 
 interface PiRelease {
@@ -132,11 +134,19 @@ function fallbackAscii(): string[] {
 	}
 }
 
-function colorizeFluidLine(line: string, land: readonly boolean[]): string {
+function colorizeFluidLine(
+	line: string,
+	land: readonly boolean[],
+	accent: readonly number[] = [],
+): string {
 	let output = "";
 	let activeColor = "";
 	for (const [index, character] of [...line].entries()) {
-		const color = land[index] ? LAND_COLOR : LOGO_COLOR;
+		const color = accent[index] === 255
+			? COMET_HEAD_COLOR
+			: accent[index] === 128
+				? COMET_TAIL_COLOR
+				: land[index] ? LAND_COLOR : LOGO_COLOR;
 		if (color !== activeColor) {
 			output += color;
 			activeColor = color;
@@ -248,6 +258,9 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 			.getBranch()
 			.some((entry) => entry.type === "message");
 		const introProfile = resolveIntroProfile(ctx.cwd);
+		// Resolve once per displayed intro: every render and resize follows the
+		// same route, while the next session can receive a different combination.
+		const galaxyVariant = resolveGalaxyVariant(introProfile);
 
 		ctx.ui.setHeader((tui, _theme) => {
 			const galaxyMode = introProfile.animation === "fluid-logo-gather"
@@ -272,6 +285,7 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 				rows: number;
 				lines: string[];
 				land: boolean[][];
+				accent: number[][];
 			} | undefined;
 			const finish = () => {
 				animationActive = false;
@@ -369,9 +383,9 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 									? {
 										mode: galaxyMode,
 										logoPath: SOURCE_PATH,
-										...(waitsForInput
-											? { galaxyStyle: "living" as const, transitionEffect: "comet" as const }
-											: {}),
+										galaxyStyle: galaxyVariant.style,
+										transitionEffect: galaxyVariant.transition,
+										galaxyEffects: galaxyVariant.effects,
 									}
 									: {},
 							);
@@ -406,6 +420,13 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 								dimensions.width,
 								dimensions.rows,
 							),
+							accent: rasterToAccentMask(
+								latest.accent,
+								latest.width,
+								latest.height,
+								dimensions.width,
+								dimensions.rows,
+							),
 						};
 					}
 					if (fluidAscii) art = fluidAscii.lines;
@@ -428,6 +449,7 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 				);
 				let renderedArt = art;
 				let renderedLand: boolean[][] | undefined;
+				let renderedAccent: number[][] | undefined;
 				if (shouldAnimate) {
 					if (usesFluid) {
 						const fallbackFrame = animationFrames && animationFrames.length > 0
@@ -438,6 +460,7 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 							?? animationFrames?.[fallbackFrame]
 							?? art;
 						renderedLand = fluidAscii?.land;
+						renderedAccent = fluidAscii?.accent;
 					} else if (converted) {
 						try {
 							const logoMtime = statSync(join(EXTENSION_DIR, "logo.svg")).mtimeMs;
@@ -465,7 +488,9 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 				return [
 					...Array.from({ length: topPadding }, () => ""),
 					...renderedArt.map((line, row) => centerLogoLine(
-						renderedLand ? colorizeFluidLine(line, renderedLand[row] ?? []) : line,
+						renderedLand
+							? colorizeFluidLine(line, renderedLand[row] ?? [], renderedAccent?.[row])
+							: line,
 						artCanvasWidth,
 						width,
 					)),

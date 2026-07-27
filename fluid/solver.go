@@ -30,6 +30,7 @@ type solver struct {
 	targetWidth, targetHeight          int
 	galaxy                             []galaxyParticle
 	galaxyStyle                        galaxyStyle
+	galaxyEffects                      galaxyEffect
 	galaxyTime                         float64
 	experimentInitialized              bool
 	galaxyImpactApplied                bool

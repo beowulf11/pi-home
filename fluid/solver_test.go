@@ -209,11 +209,38 @@ func TestLivingGalaxyRemainsStructuredAndFinite(t *testing.T) {
 	}
 }
 
+func TestGalaxyEffectsParseAndCompose(t *testing.T) {
+	effects := parseGalaxyEffects("nebula,starfield,shooting-stars,pulse,unknown")
+	wanted := galaxyNebula | galaxyStarfield | galaxyShootingStars | galaxyPulse
+	if effects != wanted {
+		t.Fatalf("unexpected effects mask: got %d, want %d", effects, wanted)
+	}
+
+	plain := newSolver(80, 48)
+	plain.initializeGalaxy(galaxyLiving)
+	plainRaster, _ := plain.rasterGalaxy(80, 48)
+	dressed := newSolver(80, 48)
+	dressed.galaxyEffects = wanted
+	dressed.initializeGalaxy(galaxyLiving)
+	dressedRaster, _ := dressed.rasterGalaxy(80, 48)
+	if bytes.Equal(plainRaster, dressedRaster) {
+		t.Fatal("composed effects did not alter galaxy raster")
+	}
+}
+
 func TestCometAndImpactAreDistinctAndBounded(t *testing.T) {
 	s := newSolver(80, 48)
 	s.initializeGalaxy(galaxyLiving)
 	galaxy, _ := s.rasterGalaxy(80, 48)
-	comet, _ := s.rasterComet(80, 48, .55)
+	comet, _, accent := s.rasterComet(80, 48, .55)
+	var tail, head bool
+	for _, value := range accent {
+		tail = tail || value == 128
+		head = head || value == 255
+	}
+	if !tail || !head {
+		t.Fatalf("comet accent mask lacks tail/head labels: tail=%v head=%v", tail, head)
+	}
 	if bytes.Equal(galaxy, comet) {
 		t.Fatal("comet did not alter galaxy raster")
 	}

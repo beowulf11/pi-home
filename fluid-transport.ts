@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { GalaxyEffect, GalaxyStyle, GalaxyTransition } from "./intro-config.ts";
 
 export type FluidPhase = "ocean" | "galaxy" | "comet" | "impact" | "gather" | "settled";
 
@@ -9,19 +10,22 @@ export interface FluidFrame {
 	pixels: Uint8Array;
 	/** 255 for visible land, 0 for water/air at each source pixel. */
 	land: Uint8Array;
+	/** 0 for normal art, 128 for comet tail, 255 for comet head. */
+	accent: Uint8Array;
 	phase?: FluidPhase;
 }
 
 export interface FluidTransportOptions {
 	mode?: "default" | "fluid-logo-gather" | "galaxy-logo-on-input";
 	logoPath?: string;
-	/** Independently swappable experiment modules. */
-	galaxyStyle?: "classic" | "living";
-	transitionEffect?: "direct" | "comet";
+	/** Independently swappable and composable experiment modules. */
+	galaxyStyle?: GalaxyStyle;
+	transitionEffect?: GalaxyTransition;
+	galaxyEffects?: readonly GalaxyEffect[];
 }
 
 export function parseFrameLine(line: string): FluidFrame | undefined {
-	const match = line.match(/^frame (\d+) ([1-9]\d*) ([1-9]\d*) ([A-Za-z0-9+/]+={0,2}) ([A-Za-z0-9+/]+={0,2})(?: (ocean|galaxy|comet|impact|gather|settled))?$/);
+	const match = line.match(/^frame (\d+) ([1-9]\d*) ([1-9]\d*) ([A-Za-z0-9+/]+={0,2}) ([A-Za-z0-9+/]+={0,2})(?: (ocean|galaxy|comet|impact|gather|settled)| ([A-Za-z0-9+/]+={0,2})(?: (ocean|galaxy|comet|impact|gather|settled))?)?$/);
 	if (!match) return undefined;
 	const sequence = Number(match[1]);
 	const width = Number(match[2]);
@@ -29,19 +33,25 @@ export function parseFrameLine(line: string): FluidFrame | undefined {
 	if (!Number.isSafeInteger(sequence) || !Number.isSafeInteger(width) || !Number.isSafeInteger(height)) return undefined;
 	const encodedPixels = match[4]!;
 	const encodedLand = match[5]!;
+	const encodedAccent = match[7];
 	const pixels = Buffer.from(encodedPixels, "base64");
 	const land = Buffer.from(encodedLand, "base64");
 	const expectedLength = width * height;
-	if (pixels.length !== expectedLength || land.length !== expectedLength
+	const accent = encodedAccent
+		? Buffer.from(encodedAccent, "base64")
+		: Buffer.alloc(expectedLength);
+	if (pixels.length !== expectedLength || land.length !== expectedLength || accent.length !== expectedLength
 		|| pixels.toString("base64") !== encodedPixels
-		|| land.toString("base64") !== encodedLand) return undefined;
+		|| land.toString("base64") !== encodedLand
+		|| (encodedAccent && accent.toString("base64") !== encodedAccent)) return undefined;
 	return {
 		sequence,
 		width,
 		height,
 		pixels: new Uint8Array(pixels),
 		land: new Uint8Array(land),
-		phase: match[6] as FluidPhase | undefined,
+		accent: new Uint8Array(accent),
+		phase: (match[6] ?? match[8]) as FluidPhase | undefined,
 	};
 }
 
@@ -74,6 +84,9 @@ export class FluidTransport {
 				: [];
 			if (this.options.galaxyStyle) args.push("--galaxy-style", this.options.galaxyStyle);
 			if (this.options.transitionEffect) args.push("--transition-effect", this.options.transitionEffect);
+			if (this.options.galaxyEffects?.length) {
+				args.push("--galaxy-effects", this.options.galaxyEffects.join(","));
+			}
 			const child = spawn(this.executable, args, { stdio: ["pipe", "pipe", "pipe"] });
 			this.child = child;
 			child.stdin.on("error", () => {});

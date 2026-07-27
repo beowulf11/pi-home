@@ -21,6 +21,7 @@ func main() {
 	logoPath := flag.String("logo", "", "PNG target used by galaxy-to-logo modes")
 	galaxyStyleName := flag.String("galaxy-style", "", "galaxy visual module: classic or living")
 	transitionEffect := flag.String("transition-effect", "", "input transition module: direct or comet")
+	galaxyEffectsName := flag.String("galaxy-effects", "", "comma-separated galaxy overlays: nebula, starfield, shooting-stars, pulse")
 	flag.Parse()
 	if *galaxyStyleName == "" {
 		if *mode == "galaxy-logo-on-input" {
@@ -107,6 +108,7 @@ func main() {
 				if *galaxyStyleName == "living" {
 					style = galaxyLiving
 				}
+				s.galaxyEffects = parseGalaxyEffects(*galaxyEffectsName)
 				s.initializeGalaxy(style)
 				s.setLogoTarget(
 					logo.target(width, height, c.logoWidth, c.logoRows*2),
@@ -119,7 +121,7 @@ func main() {
 				continue
 			}
 			phase := ""
-			var pixels, land []byte
+			var pixels, land, accent []byte
 			if (*mode != "fluid-logo-gather" && *mode != "galaxy-logo-on-input") || logo == nil {
 				s.step(1.0 / 60)
 				pixels, land = s.raster(width, height)
@@ -149,7 +151,7 @@ func main() {
 				case "comet":
 					progress := float64(experimentFrame) / float64(experimentCometFrames-1)
 					s.stepGalaxy(1.0 / 60)
-					pixels, land = s.rasterComet(width, height, progress)
+					pixels, land, accent = s.rasterComet(width, height, progress)
 					phase = "comet"
 					experimentFrame++
 					if experimentFrame >= experimentCometFrames {
@@ -191,19 +193,24 @@ func main() {
 				pixels, land = s.rasterLogo(width, height)
 				phase = "settled"
 			}
+			if len(accent) != width*height {
+				accent = make([]byte, width*height)
+			}
 			if phase == "" {
-				fmt.Printf(
-					"frame %d %d %d %s %s\n",
-					s.sequence, width, height,
-					base64.StdEncoding.EncodeToString(pixels),
-					base64.StdEncoding.EncodeToString(land),
-				)
-			} else {
 				fmt.Printf(
 					"frame %d %d %d %s %s %s\n",
 					s.sequence, width, height,
 					base64.StdEncoding.EncodeToString(pixels),
 					base64.StdEncoding.EncodeToString(land),
+					base64.StdEncoding.EncodeToString(accent),
+				)
+			} else {
+				fmt.Printf(
+					"frame %d %d %d %s %s %s %s\n",
+					s.sequence, width, height,
+					base64.StdEncoding.EncodeToString(pixels),
+					base64.StdEncoding.EncodeToString(land),
+					base64.StdEncoding.EncodeToString(accent),
 					phase,
 				)
 			}

@@ -13,6 +13,11 @@ const mode: NonNullable<FluidTransportOptions["mode"]> = requestedMode === "defa
 const triggerFrame = Math.max(1, Number(process.argv[5] ?? 180));
 const galaxyStyle = process.argv[6] === "classic" ? "classic" : "living";
 const transitionEffect = process.argv[7] === "direct" ? "direct" : "comet";
+const validEffects = new Set(["nebula", "starfield", "shooting-stars", "pulse"] as const);
+const galaxyEffects = (process.argv[8] ?? "nebula,starfield,pulse")
+	.split(",")
+	.filter((effect): effect is "nebula" | "starfield" | "shooting-stars" | "pulse" =>
+		validEffects.has(effect as "nebula" | "starfield" | "shooting-stars" | "pulse"));
 let count = 0;
 let transitionSent = false;
 
@@ -23,6 +28,7 @@ const options: FluidTransportOptions = mode === "default"
 		logoPath: join(import.meta.dirname, "..", "source.png"),
 		galaxyStyle,
 		transitionEffect,
+		galaxyEffects,
 	};
 const transport = new FluidTransport(
 	join(import.meta.dirname, "..", "bin", "fluid-intro"),

@@ -6,7 +6,7 @@ Global Pi extension that:
 - centers the art using the current terminal width and height, rendering the logo/water in `#F28954` and beach land in sandy `#D6B56E`;
 - regenerates and caches the art when the terminal size or source image changes;
 - chooses a hard-coded intro profile from the Pi session's working directory;
-- plays a rotating ASCII spiral galaxy that smoothly gathers into the responsive Praktik logo in every project;
+- picks one of several galaxy routes on every displayed intro, with independently composable galaxy, transition, and ambient-effect modules, then smoothly gathers into the responsive Praktik logo;
 - keeps `/tmp` and `/private/tmp` as explicit aliases for the latest experimental profile so future candidates can be tested there before promotion;
 - retains the Go PIC/FLIP beach-wave implementation as an available variant and immediate/missing-binary fallback;
 - shows a minimal update list directly above the editor only when updates exist, then removes it as soon as input or agent work begins;
@@ -22,7 +22,27 @@ Profiles are currently defined in `intro-config.ts`. The first configured root c
 | `praktik` | `$HOME/code/praktik` or any descendant | `galaxy-logo-on-input` |
 | `default` | Everything else | `galaxy-logo-on-input` |
 
-All profiles run the living-galaxy sequence. After a randomized three-to-six-second orbit, a curved comet and trail enter automatically. Collision holds one frozen overexposed frame, then an expanding shock front physically displaces the stars before the gather begins. A sparse subset overshoots its sampled logo destinations and springs back before the exact responsive logo raster settles. The morph target receives the measured width and row count from the same `imageToAscii()` result used for the settled logo, so every profile shares one scaling policy. After settlement, the Go process becomes idle rather than exiting; a terminal resize sends one new target size and receives one new settled frame. Existing sessions show the settled logo immediately.
+Every displayed intro picks one preset route and keeps it stable across renders/resizes. The next session can pick another. The built-in routes are:
+
+| Preset | Galaxy | Transition | Combined ambient effects |
+|---|---|---|---|
+| `classic-drift` | classic | direct, on input | starfield |
+| `living-nebula` | living | direct, on input | nebula + nucleus pulse |
+| `comet-trail` | living | timed comet/impact | starfield |
+| `meteor-shower` | living | timed comet/impact | starfield + shooting stars |
+| `cosmic-storm` | living | timed comet/impact | nebula + starfield + shooting stars + pulse |
+
+Set `PI_GALAXY_VARIANT` to force either a preset or a composable path. For example:
+
+```sh
+PI_GALAXY_VARIANT=meteor-shower pi
+PI_GALAXY_VARIANT='classic/direct/nebula+starfield' pi
+PI_GALAXY_VARIANT='living/comet/nebula+shooting-stars+pulse' pi
+```
+
+A custom path is `style/transition/effect+effect`: styles are `classic` and `living`; transitions are `direct` and `comet`; effects are `nebula`, `starfield`, `shooting-stars`, and `pulse`. Invalid paths fall back to the profile's random preset pool. Preset pools can be customized per profile with `galaxyVariants` in `intro-config.ts`.
+
+For comet routes, after a randomized three-to-six-second orbit, a curved red-hot comet enters automatically with a deep-crimson tail and incandescent red-orange head. Collision holds one frozen overexposed frame, then an expanding shock front physically displaces the stars before the gather begins. Direct routes orbit until input or agent work requests the gather. The living style lets a sparse subset overshoot its sampled logo destinations and spring back before the exact responsive logo raster settles. The morph target receives the measured width and row count from the same `imageToAscii()` result used for the settled logo, so every profile shares one scaling policy. After settlement, the Go process becomes idle rather than exiting; a terminal resize sends one new target size and receives one new settled frame. Existing sessions show the settled logo immediately.
 
 All profiles use the galaxy-to-logo pipeline. `default-wave-animation.ts` remains an isolated fallback for startup before the first generated frame and when the local executable is absent. The retained FLIP implementation is described below. New hard-coded project profiles can be added to `INTRO_PROFILES` before a generic configuration format is introduced.
 
@@ -31,7 +51,7 @@ All profiles use the galaxy-to-logo pipeline. `default-wave-animation.ts` remain
 The fluid renderer deliberately separates three layers:
 
 1. `fluid/` is a minimal Go 2-D PIC/FLIP solver and occupancy rasterizer. It uses particles, staggered MAC-grid transfers, gravity/advection, pressure projection, a 95% FLIP / 5% PIC grid-to-particle update, solid tank boundaries, and grayscale particle rasterization. Water volume is conserved, two spatial-hash particle-separation passes prevent visual collapse, and particle speed is bounded for long-running stability. The scene now begins as a settled ocean over a flat seabed that rises into an invisible smooth beach on the right. Broad overlapping swells enter from the left every three seconds, shoal against that solid slope, run upward, break, and flow back. The collision floor and beach are rasterized as a restrained deterministic ASCII grain with a brighter surface ridge. The flat submerged floor remains water-colored so the ocean reaches the bottom of the canvas; only the rising right-hand shore receives the sandy land color. Raster splats scale with simulation cells so the same persistent water body remains continuous on large terminals. Source attribution to Matthias Müller's MIT-licensed Ten Minute Physics FLIP work is in `fluid/solver.go`, with the license text in `fluid/THIRD_PARTY_LICENSES.md`.
-2. `fluid-transport.ts` owns the persistent child process and line protocol. Pi sends `resize <pixelWidth> <pixelHeight>`, `transition`, and `stop`; Go returns `frame <sequence> <width> <height> <base64 grayscale bytes> <base64 land-mask bytes>`, optionally followed by an animation phase (`ocean`, `galaxy`, `comet`, `impact`, `gather`, or `settled`). Only the newest valid complete frame is retained. stderr is drained away from the TUI.
+2. `fluid-transport.ts` owns the persistent child process and line protocol. Pi sends `resize <pixelWidth> <pixelHeight>`, `transition`, and `stop`; Go returns `frame <sequence> <width> <height> <base64 grayscale bytes> <base64 land-mask bytes> <base64 accent-mask bytes>`, optionally followed by an animation phase (`ocean`, `galaxy`, `comet`, `impact`, `gather`, or `settled`). Only the newest valid complete frame is retained. stderr is drained away from the TUI.
 3. `raster-to-ascii.ts` is pure TypeScript area resampling/density conversion with terminal-cell aspect compensation and optional deterministic temporal hysteresis. It independently resamples the material mask so ANSI styling cannot alter geometry or character selection.
 
 The child is started lazily by the animated header's first render, never while the extension factory loads. Its initial resize determines the stable physics grid. Later terminal resizes change only raster output dimensions, preserving normalized particle positions and velocity. The fluid canvas uses the complete terminal width and all available terminal rows except the adaptive top/bottom margins and Pi's editor/footer reservation. At 60 fps it continues for as long as the empty intro is idle, then agent start, header disposal, or session shutdown stops it idempotently. The last buffered frame remains available for the static header. The legacy finite Praktik entrance remains available in the codebase but is no longer assigned to a profile.
@@ -43,7 +63,7 @@ cd ~/code/personal/pi/fancy-intro
 npm run build:fluid
 npm test
 npm run test:fluid
-npm run preview:fluid          # optional width/height: ... -- 64 20
+npm run preview:fluid          # optional: ... -- 64 20 galaxy-logo-on-input 180 living comet nebula,starfield,pulse
 ```
 
 The platform executable is generated at ignored `bin/fluid-intro`; it is intentionally not committed. Node 24 runs the TypeScript tests/scripts directly.

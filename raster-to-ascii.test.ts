@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { rasterToAscii, rasterToLandMask } from "./raster-to-ascii.ts";
+import { rasterToAccentMask, rasterToAscii, rasterToLandMask } from "./raster-to-ascii.ts";
 
 test("resamples to exact requested dimensions", () => {
 	const lines = rasterToAscii(Uint8Array.from([0, 255, 255, 0]), 2, 2, 7, 3, { density: " .#" });
@@ -21,6 +21,13 @@ test("resamples land material independently from character density", () => {
 	assert.deepEqual(
 		rasterToLandMask(Uint8Array.from([0, 255, 255, 255]), 2, 2, 2, 2, 1),
 		[[false, true], [true, true]],
+	);
+});
+
+test("preserves the strongest comet accent in each terminal cell", () => {
+	assert.deepEqual(
+		rasterToAccentMask(Uint8Array.from([0, 128, 0, 255]), 2, 2, 1, 1),
+		[[255]],
 	);
 });
 

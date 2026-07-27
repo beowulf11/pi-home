@@ -4,9 +4,21 @@ import { FluidTransport, parseFrameLine } from "./fluid-transport.ts";
 
 test("parses a complete frame", () => {
 	const frame = parseFrameLine("frame 7 2 2 AAECAw== /wD/AA==");
-	assert.deepEqual(frame && { ...frame, pixels: [...frame.pixels], land: [...frame.land] }, {
-		sequence: 7, width: 2, height: 2, pixels: [0, 1, 2, 3], land: [255, 0, 255, 0], phase: undefined,
+	assert.deepEqual(frame && {
+		...frame,
+		pixels: [...frame.pixels],
+		land: [...frame.land],
+		accent: [...frame.accent],
+	}, {
+		sequence: 7, width: 2, height: 2, pixels: [0, 1, 2, 3], land: [255, 0, 255, 0],
+		accent: [0, 0, 0, 0], phase: undefined,
 	});
+});
+
+test("parses comet head and tail accents", () => {
+	const frame = parseFrameLine("frame 9 2 2 AAECAw== AAAAAA== AID/AA== comet");
+	assert.deepEqual(frame && [...frame.accent], [0, 128, 255, 0]);
+	assert.equal(frame?.phase, "comet");
 });
 
 test("parses experiment frame phases", () => {

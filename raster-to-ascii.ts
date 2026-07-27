@@ -105,3 +105,38 @@ export function rasterToLandMask(
 	}
 	return rows;
 }
+
+/** Resample categorical accents; the strongest label in a cell wins. */
+export function rasterToAccentMask(
+	accent: Uint8Array,
+	sourceWidth: number,
+	sourceHeight: number,
+	targetWidth: number,
+	targetHeight: number,
+	characterAspect = 2,
+): number[][] {
+	validateRaster(accent, sourceWidth, sourceHeight, targetWidth, targetHeight);
+	if (targetWidth === 0 || targetHeight === 0) return [];
+	const aspect = Math.max(.25, characterAspect);
+	const rows: number[][] = [];
+	for (let y = 0; y < targetHeight; y += 1) {
+		const row: number[] = [];
+		for (let x = 0; x < targetWidth; x += 1) {
+			const x0 = Math.floor(x * sourceWidth / targetWidth);
+			const x1 = Math.max(x0 + 1, Math.ceil((x + 1) * sourceWidth / targetWidth));
+			const centerY = (y + .5) * sourceHeight / targetHeight;
+			const sampleHeight = sourceHeight / targetHeight * aspect / 2;
+			const y0 = Math.max(0, Math.floor(centerY - sampleHeight / 2));
+			const y1 = Math.min(sourceHeight, Math.max(y0 + 1, Math.ceil(centerY + sampleHeight / 2)));
+			let strongest = 0;
+			for (let sy = y0; sy < y1; sy += 1) {
+				for (let sx = x0; sx < Math.min(sourceWidth, x1); sx += 1) {
+					strongest = Math.max(strongest, accent[sy * sourceWidth + sx]!);
+				}
+			}
+			row.push(strongest);
+		}
+		rows.push(row);
+	}
+	return rows;
+}
