@@ -331,6 +331,133 @@ func TestCometAndImpactAreDistinctAndBounded(t *testing.T) {
 	}
 }
 
+func TestRecurringCometDelayStaysWithinTenToThirtySeconds(t *testing.T) {
+	seen := map[int]bool{}
+	for sample := 0; sample < 200; sample++ {
+		delay := randomRecurringCometDelayFrames()
+		if delay < recurringCometDelayMinFrames || delay > recurringCometDelayMaxFrames {
+			t.Fatalf("recurring delay outside bounds: %d", delay)
+		}
+		seen[delay] = true
+	}
+	if len(seen) < 2 {
+		t.Fatal("recurring comet delay did not vary")
+	}
+}
+
+func TestRecurringCometCrossesTheRotatingLogo(t *testing.T) {
+	source, err := loadLogoSource("../source.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const width, height = 80, 48
+	s := newSolver(width, height)
+	s.setLogoTarget(source.target(width, height, 48, 40), width, height)
+	logo, _, surfaces := s.rasterRotatingLogo(width, height, math.Pi/3)
+	s.randomizeRecurringCometPath()
+	comet, _, accent := s.rasterRecurringComet(width, height, .55, logo, surfaces)
+	if bytes.Equal(logo, comet) {
+		t.Fatal("recurring comet did not alter the projected logo")
+	}
+	var cometLabel, preservedSurface bool
+	for _, label := range accent {
+		cometLabel = cometLabel || label >= 128
+		preservedSurface = preservedSurface || label == logoSurfaceFront || label == logoSurfaceEdge || label == logoSurfaceBack
+	}
+	if !cometLabel || !preservedSurface {
+		t.Fatalf("combined accent mask lost comet or logo labels: comet=%v surface=%v", cometLabel, preservedSurface)
+	}
+}
+
+func TestRecurringCometUsesRandomDirectionsAndHitsLogoCenter(t *testing.T) {
+	source, err := loadLogoSource("../source.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const width, height = 80, 48
+	s := newSolver(width, height)
+	s.setLogoTarget(source.target(width, height, 48, 40), width, height)
+	starts := map[[2]int]bool{}
+	for sample := 0; sample < 100; sample++ {
+		s.randomizeRecurringCometPath()
+		path := s.recurringCometPath
+		if path.start.x >= 0 && path.start.x <= 1 && path.start.y >= 0 && path.start.y <= 1 {
+			t.Fatalf("comet start is not outside viewport: %+v", path.start)
+		}
+		if math.Abs(path.impact.x-.5) > .02 || math.Abs(path.impact.y-.5) > .02 {
+			t.Fatalf("comet misses logo center: %+v", path.impact)
+		}
+		dx, dy := path.start.x-path.impact.x, path.start.y-path.impact.y
+		starts[[2]int{int(math.Round(dx * 10)), int(math.Round(dy * 10))}] = true
+	}
+	if len(starts) < 8 {
+		t.Fatalf("comet directions did not vary enough: %d", len(starts))
+	}
+}
+
+func TestRecurringImpactAndRegatherExcludeGalaxyBackdrop(t *testing.T) {
+	source, err := loadLogoSource("../source.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const width, height = 80, 48
+	makeSolver := func(effects galaxyEffect) *solver {
+		s := newSolver(width, height)
+		s.initializeGalaxy(galaxyLiving)
+		s.galaxyEffects = effects
+		s.setLogoTarget(source.target(width, height, 48, 40), width, height)
+		s.logoAngle = math.Pi / 4
+		s.recurringCometPath = cometPath{impact: point{x: .5, y: .5}}
+		s.placeParticlesOnRotatingLogo(s.logoAngle)
+		s.stepLogoImpact(1.0/60, .4)
+		return s
+	}
+	plain := makeSolver(0)
+	dressed := makeSolver(galaxyNebula | galaxyStarfield | galaxyShootingStars | galaxyPulse)
+	plainImpact, _ := plain.rasterLogoImpact(width, height, .4)
+	dressedImpact, _ := dressed.rasterLogoImpact(width, height, .4)
+	if !bytes.Equal(plainImpact, dressedImpact) {
+		t.Fatal("galaxy effects leaked into recurring logo impact")
+	}
+	plainGather, _, _ := plain.rasterRotatingLogoRegather(width, height, .35, plain.logoAngle)
+	dressedGather, _, _ := dressed.rasterRotatingLogoRegather(width, height, .35, dressed.logoAngle)
+	if !bytes.Equal(plainGather, dressedGather) {
+		t.Fatal("galaxy effects leaked into recurring logo reconstruction")
+	}
+}
+
+func TestLogoParticlesCanBeDestroyedAndGatheredAgain(t *testing.T) {
+	source, err := loadLogoSource("../source.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const width, height = 80, 48
+	s := newSolver(width, height)
+	s.initializeGalaxy(galaxyLiving)
+	s.setLogoTarget(source.target(width, height, 48, 40), width, height)
+	s.logoAngle = math.Pi / 4
+	s.recurringCometPath = cometPath{impact: point{x: .5, y: .5}}
+	s.placeParticlesOnRotatingLogo(s.logoAngle)
+	s.galaxyImpactApplied = false
+	for frame := 0; frame < experimentImpactFrames; frame++ {
+		s.stepLogoImpact(1.0/60, float64(frame)/float64(experimentImpactFrames-1))
+	}
+	for frame := 0; frame < experimentGatherFrames; frame++ {
+		s.advanceLogoRotation(1.0 / 60)
+		s.stepRotatingLogoGather(1.0/60, float64(frame)/float64(experimentGatherFrames-1), s.logoAngle)
+	}
+	gathered, _, _ := s.rasterRotatingGather(width, height, 1, s.logoAngle)
+	projected, _, _ := s.rasterRotatingLogo(width, height, s.logoAngle)
+	if !bytes.Equal(gathered, projected) {
+		t.Fatal("destroyed logo did not recreate as the current rotating projection")
+	}
+	for _, particle := range s.p {
+		if math.IsNaN(particle.x) || math.IsNaN(particle.y) || particle.x < 0 || particle.x > 1 || particle.y < 0 || particle.y > 1 {
+			t.Fatalf("recurring cycle produced invalid particle: %+v", particle)
+		}
+	}
+}
+
 func TestLogoTargetRetainsAspectAcrossViewports(t *testing.T) {
 	source, err := loadLogoSource("../source.png")
 	if err != nil {

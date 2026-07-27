@@ -81,6 +81,9 @@ func main() {
 	settledDirty := true
 	experimentState := "galaxy"
 	experimentFrame := 0
+	settledFrames := 0
+	nextRecurringComet := randomRecurringCometDelayFrames()
+	recurringComet := false
 	liquidated := false
 	autoCometDelay := experimentCometDelayMinFrames + int(
 		time.Now().UnixNano()%int64(experimentCometDelayMaxFrames-experimentCometDelayMinFrames+1),
@@ -95,7 +98,8 @@ func main() {
 				if *mode == "galaxy-logo-on-input" && s != nil && !s.liquidationInitialized {
 					// A submitted message liquidates whatever the intro currently shows:
 					// orbiting galaxy, comet/impact, gathering particles, or settled logo.
-					if rotatingLogo && experimentState == "settled" {
+					if rotatingLogo && (experimentState == "settled" ||
+						(recurringComet && (experimentState == "comet" || experimentState == "impact-hold"))) {
 						s.placeParticlesOnRotatingLogo(s.logoAngle)
 					}
 					s.beginLiquidation()
@@ -170,15 +174,32 @@ func main() {
 					}
 				case "comet":
 					progress := float64(experimentFrame) / float64(experimentCometFrames-1)
-					s.stepGalaxy(1.0 / 60)
-					pixels, land, accent = s.rasterComet(width, height, progress)
+					if recurringComet {
+						s.advanceLogoRotation(1.0 / 60)
+						s.sequence++
+						logoPixels, _, logoSurfaces := s.rasterRotatingLogo(width, height, s.logoAngle)
+						pixels, land, accent = s.rasterRecurringComet(width, height, progress, logoPixels, logoSurfaces)
+					} else {
+						s.stepGalaxy(1.0 / 60)
+						pixels, land, accent = s.rasterComet(width, height, progress)
+					}
 					phase = "comet"
 					experimentFrame++
 					if experimentFrame >= experimentCometFrames {
+						if recurringComet {
+							s.placeParticlesOnRotatingLogo(s.logoAngle)
+						}
 						experimentState, experimentFrame = "impact-hold", 0
 					}
 				case "impact-hold":
-					pixels, land = s.rasterGalaxyImpactHold(width, height)
+					if recurringComet {
+						s.advanceLogoRotation(1.0 / 60)
+						s.sequence++
+						logoPixels, _, _ := s.rasterRotatingLogo(width, height, s.logoAngle)
+						pixels, land = rasterImpactHold(width, height, logoPixels, s.recurringCometPath.impact)
+					} else {
+						pixels, land = s.rasterGalaxyImpactHold(width, height)
+					}
 					phase = "impact"
 					experimentFrame++
 					if experimentFrame >= experimentImpactHoldFrames {
@@ -186,11 +207,18 @@ func main() {
 					}
 				case "impact":
 					progress := float64(experimentFrame) / float64(experimentImpactFrames-1)
-					s.stepGalaxyImpact(1.0/60, progress)
-					pixels, land = s.rasterGalaxyImpact(width, height, progress)
+					if recurringComet {
+						s.advanceLogoRotation(1.0 / 60)
+						s.stepLogoImpact(1.0/60, progress)
+						pixels, land = s.rasterLogoImpact(width, height, progress)
+					} else {
+						s.stepGalaxyImpact(1.0/60, progress)
+						pixels, land = s.rasterGalaxyImpact(width, height, progress)
+					}
 					phase = "impact"
 					experimentFrame++
 					if experimentFrame >= experimentImpactFrames {
+						s.gatherOrigins = nil
 						experimentState, experimentFrame = "gather", 0
 					}
 				case "gather":
@@ -198,7 +226,11 @@ func main() {
 					if rotatingLogo {
 						s.advanceLogoRotation(1.0 / 60)
 						s.stepRotatingLogoGather(1.0/60, progress, s.logoAngle)
-						pixels, land, accent = s.rasterRotatingGather(width, height, progress, s.logoAngle)
+						if recurringComet {
+							pixels, land, accent = s.rasterRotatingLogoRegather(width, height, progress, s.logoAngle)
+						} else {
+							pixels, land, accent = s.rasterRotatingGather(width, height, progress, s.logoAngle)
+						}
 					} else {
 						s.stepLogoGather(1.0/60, progress)
 						pixels, land = s.rasterGather(width, height, progress)
@@ -207,16 +239,28 @@ func main() {
 					experimentFrame++
 					if experimentFrame >= experimentGatherFrames {
 						experimentState = "settled"
+						settledFrames = 0
+						nextRecurringComet = randomRecurringCometDelayFrames()
+						recurringComet = false
 					}
 				}
 			}
 			if experimentState == "settled" && phase == "" {
 				if rotatingLogo && !liquidated {
-					// Unlike the flat logo, the 3-D treatment stays live so the /tmp
-					// experiment continues orbiting until input liquidates it.
+					// The 3-D treatment stays live until input liquidates it. Comet
+					// presets periodically collide with the solid and rebuild it.
 					s.advanceLogoRotation(1.0 / 60)
 					s.sequence++
 					pixels, land, accent = s.rasterRotatingLogo(width, height, s.logoAngle)
+					if *transitionEffect == "comet" {
+						settledFrames++
+						if settledFrames >= nextRecurringComet {
+							s.galaxyImpactApplied = false
+							s.randomizeRecurringCometPath()
+							experimentState, experimentFrame = "comet", 0
+							recurringComet = true
+						}
+					}
 				} else {
 					if !settledDirty {
 						continue

@@ -32,6 +32,7 @@ type solver struct {
 	galaxyStyle                        galaxyStyle
 	galaxyEffects                      galaxyEffect
 	galaxyTime, logoAngle              float64
+	recurringCometPath                 cometPath
 	experimentInitialized              bool
 	galaxyImpactApplied                bool
 	liquidationInitialized             bool

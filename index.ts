@@ -417,7 +417,8 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 						|| dimensions.width !== fluidAscii.width
 						|| dimensions.rows !== fluidAscii.rows)) {
 						const expressive3d = introProfile.logoPresentation === "rotating-3d"
-							&& (latest.phase === "gather" || latest.phase === "settled") && !liquidView;
+							&& (latest.phase === "gather" || latest.phase === "settled" || latest.phase === "comet")
+							&& !liquidView;
 						// Keep one base ramp across the whole galaxy → logo sequence. Only
 						// cells carrying a projected logo-surface label change vocabulary.
 						const cosmic = introProfile.logoPresentation === "rotating-3d" && !liquidView
@@ -440,13 +441,17 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 								density: cosmic ? COSMIC_DENSITY : undefined,
 							},
 						);
+						let remappedLines = expressive3d
+							? remap3dSurfaceGlyphs(lines, accent, COSMIC_DENSITY)
+							: lines;
+						if (latest.phase === "comet") {
+							remappedLines = remapCometGlyphs(remappedLines, accent);
+						}
 						fluidAscii = {
 							sequence: latest.sequence,
 							width: dimensions.width,
 							rows: dimensions.rows,
-							lines: expressive3d
-								? remap3dSurfaceGlyphs(lines, accent, COSMIC_DENSITY)
-								: latest.phase === "comet" ? remapCometGlyphs(lines, accent) : lines,
+							lines: remappedLines,
 							land: rasterToLandMask(
 								latest.land,
 								latest.width,

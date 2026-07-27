@@ -17,6 +17,8 @@ const (
 	experimentImpactHoldFrames    = 1
 	experimentImpactFrames        = 18
 	experimentGatherFrames        = 210
+	recurringCometDelayMinFrames  = 10 * 60
+	recurringCometDelayMaxFrames  = 30 * 60
 	liquidationMinFrames          = 120
 	liquidationMaxFrames          = 420
 	liquidationStableFrames       = 30
@@ -28,6 +30,14 @@ const (
 )
 
 type point struct{ x, y float64 }
+
+type cometPath struct {
+	start, control, impact point
+}
+
+var initialCometPath = cometPath{
+	start: point{x: -.08, y: .91}, control: point{x: .18, y: .72}, impact: point{x: .5, y: .53},
+}
 
 type galaxyStyle byte
 
@@ -560,6 +570,22 @@ func (s *solver) rasterGalaxy(width, height int) ([]byte, []byte) {
 	return s.rasterGalaxyParticles(width, height, 1), make([]byte, width*height)
 }
 
+// rasterLogoParticles draws only the particles that belonged to the struck
+// logo. It deliberately excludes galaxy backdrop, arm haze, nucleus, shooting
+// stars, and every other ambient galaxy module.
+func (s *solver) rasterLogoParticles(width, height int, intensity float64) []byte {
+	out := make([]byte, width*height)
+	radiusX := math.Max(.7, float64(width)/float64(s.nx)*.34)
+	radiusY := math.Max(.7, float64(height)/float64(s.ny)*.34)
+	for index, particle := range s.p {
+		brightness := (175 + 80*hashUnit(index+1701)) * intensity
+		splatMaximum(out, width, height,
+			particle.x*float64(width-1), (1-particle.y)*float64(height-1),
+			radiusX, radiusY, brightness)
+	}
+	return out
+}
+
 func bezierPoint(start, control, end point, progress float64) point {
 	inverse := 1 - progress
 	return point{
@@ -581,15 +607,56 @@ func splatLabel(out []byte, width, height int, cx, cy, radiusX, radiusY float64,
 	}
 }
 
+func randomRecurringCometDelayFrames() int {
+	return recurringCometDelayMinFrames + rand.IntN(recurringCometDelayMaxFrames-recurringCometDelayMinFrames+1)
+}
+
+func (s *solver) randomizeRecurringCometPath() {
+	impact := point{x: .5, y: .5}
+	if minX, minY, maxX, maxY, ok := s.logoBounds(); ok && s.targetWidth > 1 && s.targetHeight > 1 {
+		impact = point{
+			x: float64(minX+maxX) / 2 / float64(s.targetWidth-1),
+			y: 1 - float64(minY+maxY)/2/float64(s.targetHeight-1),
+		}
+	}
+	angle := rand.Float64() * 2 * math.Pi
+	direction := point{x: math.Cos(angle), y: math.Sin(angle)}
+	start := point{x: impact.x + direction.x*.9, y: impact.y + direction.y*.9}
+	bend := (.08 + rand.Float64()*.12)
+	if rand.Float64() < .5 {
+		bend = -bend
+	}
+	s.recurringCometPath = cometPath{
+		start: start,
+		control: point{
+			x: (start.x+impact.x)/2 - direction.y*bend,
+			y: (start.y+impact.y)/2 + direction.x*bend,
+		},
+		impact: impact,
+	}
+}
+
 func (s *solver) rasterComet(width, height int, progress float64) ([]byte, []byte, []byte) {
-	out := s.rasterGalaxyParticles(width, height, 1)
+	return s.rasterCometOverPath(width, height, progress, s.rasterGalaxyParticles(width, height, 1), nil, initialCometPath)
+}
+
+func (s *solver) rasterRecurringComet(width, height int, progress float64, base, baseAccent []byte) ([]byte, []byte, []byte) {
+	return s.rasterCometOverPath(width, height, progress, base, baseAccent, s.recurringCometPath)
+}
+
+// rasterCometOverPath preserves the scene beneath the projectile. In recurring
+// cycles that scene is the still-rotating solid logo rather than a galaxy
+// particle approximation, so the collision visibly happens to the object.
+func (s *solver) rasterCometOverPath(width, height int, progress float64, base, baseAccent []byte, path cometPath) ([]byte, []byte, []byte) {
+	out := make([]byte, width*height)
+	copy(out, base)
 	accent := make([]byte, width*height)
-	start, control, impact := point{x: -.08, y: .91}, point{x: .18, y: .72}, point{x: .5, y: .53}
+	copy(accent, baseAccent)
 	const trailSamples = 22
 	for sample := trailSamples - 1; sample >= 0; sample-- {
 		lag := float64(sample) / float64(trailSamples-1) * .42
 		t := math.Max(0, progress-lag)
-		position := bezierPoint(start, control, impact, t)
+		position := bezierPoint(path.start, path.control, path.impact, t)
 		strength := math.Exp(-float64(sample) * .16)
 		if progress-lag <= 0 && sample > 0 {
 			strength *= math.Max(0, 1-float64(sample)/5)
@@ -600,7 +667,7 @@ func (s *solver) rasterComet(width, height int, progress float64) ([]byte, []byt
 		splatMaximum(out, width, height, cx, cy, radiusX, radiusY, 245*strength)
 		splatLabel(accent, width, height, cx, cy, radiusX, radiusY, 128)
 	}
-	head := bezierPoint(start, control, impact, progress)
+	head := bezierPoint(path.start, path.control, path.impact, progress)
 	headX, headY := head.x*float64(width-1), (1-head.y)*float64(height-1)
 	headRadiusX, headRadiusY := math.Max(2, float64(width)*.018), math.Max(2, float64(height)*.035)
 	splatMaximum(out, width, height, headX, headY, headRadiusX, headRadiusY, 255)
@@ -608,14 +675,14 @@ func (s *solver) rasterComet(width, height int, progress float64) ([]byte, []byt
 	return out, make([]byte, width*height), accent
 }
 
-func (s *solver) beginGalaxyImpact() {
+func (s *solver) beginImpactAt(center point) {
 	if s.galaxyImpactApplied {
 		return
 	}
 	s.galaxyImpactApplied = true
 	for index := range s.p {
 		p := &s.p[index]
-		dx, dy := p.x-.5, p.y-.53
+		dx, dy := p.x-center.x, p.y-center.y
 		distance := math.Max(.025, math.Hypot(dx, dy))
 		impulse := .16 + .62*math.Exp(-distance/.20)
 		p.vx = p.vx*.18 + dx/distance*impulse - dy/distance*.13
@@ -624,25 +691,30 @@ func (s *solver) beginGalaxyImpact() {
 }
 
 func (s *solver) rasterGalaxyImpactHold(width, height int) ([]byte, []byte) {
-	out := s.rasterGalaxyParticles(width, height, 1)
+	return rasterImpactHold(width, height, s.rasterGalaxyParticles(width, height, 1), initialCometPath.impact)
+}
+
+func rasterImpactHold(width, height int, base []byte, center point) ([]byte, []byte) {
+	out := make([]byte, width*height)
+	copy(out, base)
 	// Freeze the collision for one overexposed frame before releasing its energy.
 	for index, value := range out {
 		out[index] = byte(min(255, int(value)+int(value)/3))
 	}
-	centerX, centerY := .5*float64(width-1), .47*float64(height-1)
+	centerX, centerY := center.x*float64(width-1), (1-center.y)*float64(height-1)
 	splatMaximum(out, width, height, centerX, centerY, math.Max(3, float64(width)*.075), math.Max(3, float64(height)*.11), 255)
 	return out, make([]byte, width*height)
 }
 
-func (s *solver) stepGalaxyImpact(dt, progress float64) {
-	s.beginGalaxyImpact()
+func (s *solver) stepImpactAt(dt, progress float64, center point) {
+	s.beginImpactAt(center)
 	waveRadius := .30 * smoothstep(progress)
 	for index := range s.p {
 		p := &s.p[index]
-		dx, dy := p.x-.5, p.y-.53
+		dx, dy := p.x-center.x, p.y-center.y
 		distance := math.Max(.001, math.Hypot(dx, dy))
-		// The narrow moving force band physically displaces stars as the visible
-		// shock ring reaches them, rather than painting a passive overlay.
+		// The narrow moving force band physically displaces particles as the
+		// visible shock ring reaches them, rather than painting a passive overlay.
 		bandDistance := (distance - waveRadius) / .035
 		waveForce := math.Exp(-bandDistance*bandDistance) * .34
 		p.vx += dx / distance * waveForce * dt
@@ -655,9 +727,16 @@ func (s *solver) stepGalaxyImpact(dt, progress float64) {
 	s.sequence++
 }
 
-func (s *solver) rasterGalaxyImpact(width, height int, progress float64) ([]byte, []byte) {
-	out := s.rasterGalaxyParticles(width, height, 1)
-	centerX, centerY := .5*float64(width-1), .47*float64(height-1)
+func (s *solver) stepGalaxyImpact(dt, progress float64) {
+	s.stepImpactAt(dt, progress, initialCometPath.impact)
+}
+
+func (s *solver) stepLogoImpact(dt, progress float64) {
+	s.stepImpactAt(dt, progress, s.recurringCometPath.impact)
+}
+
+func rasterImpactOver(width, height int, progress float64, out []byte, center point) ([]byte, []byte) {
+	centerX, centerY := center.x*float64(width-1), (1-center.y)*float64(height-1)
 	flash := 1 - smoothstep(progress/.28)
 	splatMaximum(out, width, height, centerX, centerY, math.Max(2, float64(width)*.07)*flash, math.Max(2, float64(height)*.10)*flash, 255*flash)
 	if progress < .92 {
@@ -676,6 +755,14 @@ func (s *solver) rasterGalaxyImpact(width, height int, progress float64) ([]byte
 		}
 	}
 	return out, make([]byte, width*height)
+}
+
+func (s *solver) rasterGalaxyImpact(width, height int, progress float64) ([]byte, []byte) {
+	return rasterImpactOver(width, height, progress, s.rasterGalaxyParticles(width, height, 1), initialCometPath.impact)
+}
+
+func (s *solver) rasterLogoImpact(width, height int, progress float64) ([]byte, []byte) {
+	return rasterImpactOver(width, height, progress, s.rasterLogoParticles(width, height, 1), s.recurringCometPath.impact)
 }
 
 func smoothstep(value float64) float64 {
@@ -943,17 +1030,32 @@ func (s *solver) rasterGather(width, height int, progress float64) ([]byte, []by
 func (s *solver) rasterRotatingGather(width, height int, progress, angle float64) ([]byte, []byte, []byte) {
 	projected, _, surfaces := s.rasterRotatingLogo(width, height, angle)
 	out, land := s.rasterGatherWithTarget(width, height, progress, projected)
+	filterEmergingLogoSurfaces(out, projected, surfaces, smoothstep((progress-.58)/.42))
+	return out, land, surfaces
+}
+
+// rasterRotatingLogoRegather rebuilds from logo debris only. Reusing the
+// initial galaxy gather here would reintroduce its starfield, nebula, nucleus,
+// and arm haze after every recurring collision.
+func (s *solver) rasterRotatingLogoRegather(width, height int, progress, angle float64) ([]byte, []byte, []byte) {
+	projected, _, surfaces := s.rasterRotatingLogo(width, height, angle)
+	particleFade := 1 - smoothstep((progress-.78)/.22)
+	out := s.rasterLogoParticles(width, height, particleFade)
 	blend := smoothstep((progress - .58) / .42)
+	blendLogoTarget(out, projected, blend)
+	filterEmergingLogoSurfaces(out, projected, surfaces, blend)
+	return out, make([]byte, width*height), surfaces
+}
+
+func filterEmergingLogoSurfaces(out, projected, surfaces []byte, blend float64) {
 	for index := range surfaces {
 		// A surface vocabulary starts only when that projected target sample has
-		// actually overtaken the fading galaxy at this pixel. This avoids a mask-
-		// shaped glyph switch on the first gather frame.
+		// actually overtaken the fading particles at this pixel.
 		projectedValue := byte(float64(projected[index]) * blend)
 		if projectedValue == 0 || projectedValue < out[index] {
 			surfaces[index] = 0
 		}
 	}
-	return out, land, surfaces
 }
 
 func (s *solver) rasterGatherWithTarget(width, height int, progress float64, targetAlpha []byte) ([]byte, []byte) {
