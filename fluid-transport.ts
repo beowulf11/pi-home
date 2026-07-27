@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
-export type FluidPhase = "ocean" | "galaxy" | "gather" | "settled";
+export type FluidPhase = "ocean" | "galaxy" | "comet" | "impact" | "gather" | "settled";
 
 export interface FluidFrame {
 	sequence: number;
@@ -13,12 +13,15 @@ export interface FluidFrame {
 }
 
 export interface FluidTransportOptions {
-	mode?: "default" | "fluid-logo-gather";
+	mode?: "default" | "fluid-logo-gather" | "galaxy-logo-on-input";
 	logoPath?: string;
+	/** Independently swappable experiment modules. */
+	galaxyStyle?: "classic" | "living";
+	transitionEffect?: "direct" | "comet";
 }
 
 export function parseFrameLine(line: string): FluidFrame | undefined {
-	const match = line.match(/^frame (\d+) ([1-9]\d*) ([1-9]\d*) ([A-Za-z0-9+/]+={0,2}) ([A-Za-z0-9+/]+={0,2})(?: (ocean|galaxy|gather|settled))?$/);
+	const match = line.match(/^frame (\d+) ([1-9]\d*) ([1-9]\d*) ([A-Za-z0-9+/]+={0,2}) ([A-Za-z0-9+/]+={0,2})(?: (ocean|galaxy|comet|impact|gather|settled))?$/);
 	if (!match) return undefined;
 	const sequence = Number(match[1]);
 	const width = Number(match[2]);
@@ -66,8 +69,11 @@ export class FluidTransport {
 		if (this.disposed || this.child) return;
 		try {
 			const args = this.options.mode === "fluid-logo-gather"
-				? ["--mode", "fluid-logo-gather", "--logo", this.options.logoPath ?? ""]
+				|| this.options.mode === "galaxy-logo-on-input"
+				? ["--mode", this.options.mode, "--logo", this.options.logoPath ?? ""]
 				: [];
+			if (this.options.galaxyStyle) args.push("--galaxy-style", this.options.galaxyStyle);
+			if (this.options.transitionEffect) args.push("--transition-effect", this.options.transitionEffect);
 			const child = spawn(this.executable, args, { stdio: ["pipe", "pipe", "pipe"] });
 			this.child = child;
 			child.stdin.on("error", () => {});
@@ -115,6 +121,10 @@ export class FluidTransport {
 		}
 		// Bound memory if a broken process emits an unterminated stream.
 		if (this.buffered.length > 1_000_000) this.buffered = "";
+	}
+
+	transition(): void {
+		if (this.child?.stdin.writable) this.child.stdin.write("transition\n");
 	}
 
 	stop(): void {

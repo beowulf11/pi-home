@@ -25,10 +25,14 @@ type solver struct {
 	u, v, oldU, oldV, weightU, weightV []float64
 	sequence                           uint64
 	targets                            []point
+	gatherOrigins                      []point
 	targetAlpha                        []byte
 	targetWidth, targetHeight          int
 	galaxy                             []galaxyParticle
+	galaxyStyle                        galaxyStyle
+	galaxyTime                         float64
 	experimentInitialized              bool
+	galaxyImpactApplied                bool
 }
 
 func newSolver(pixelWidth, pixelHeight int) *solver {

@@ -27,7 +27,7 @@ const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const SOURCE_PATH = join(EXTENSION_DIR, "source.png");
 const FALLBACK_PATH = join(EXTENSION_DIR, "ascii-art.txt");
 const FLUID_EXECUTABLE = join(EXTENSION_DIR, "bin", "fluid-intro");
-const UPDATE_WIDGET_KEY = "custom-intro-updates";
+const UPDATE_WIDGET_KEY = "fancy-intro-updates";
 const PI_RELEASE_URL = "https://pi.dev/api/latest-version";
 const UPDATE_TIMEOUT_MS = 10_000;
 const ASCII_MAP = " .:-=+*#%@";
@@ -201,7 +201,7 @@ async function suppressBuiltInPackageUpdateNotice(): Promise<void> {
 	}
 }
 
-export default async function customIntro(pi: ExtensionAPI) {
+export default async function fancyIntro(pi: ExtensionAPI) {
 	const userSkippedPiCheck = Boolean(process.env.PI_SKIP_VERSION_CHECK);
 	const userSkippedPackageCheck = Boolean(process.env.PI_SKIP_PACKAGE_UPDATE_CHECK);
 
@@ -213,6 +213,7 @@ export default async function customIntro(pi: ExtensionAPI) {
 	let startupUpdatesVisible = false;
 	let startupUpdateRows = 0;
 	let finishIntroAnimation: (() => void) | undefined;
+	let beginIntroTransition: (() => void) | undefined;
 
 	const hideStartupUpdates = (ctx: ExtensionContext) => {
 		startupUpdatesVisible = false;
@@ -222,16 +223,19 @@ export default async function customIntro(pi: ExtensionAPI) {
 
 	pi.on("input", (_event, ctx) => {
 		hideStartupUpdates(ctx);
+		beginIntroTransition?.();
 	});
 
 	pi.on("agent_start", (_event, ctx) => {
 		hideStartupUpdates(ctx);
-		finishIntroAnimation?.();
+		if (beginIntroTransition) beginIntroTransition();
+		else finishIntroAnimation?.();
 	});
 
 	pi.on("session_shutdown", () => {
 		finishIntroAnimation?.();
 		finishIntroAnimation = undefined;
+		beginIntroTransition = undefined;
 	});
 
 	pi.on("session_start", (_event, ctx) => {
@@ -239,22 +243,29 @@ export default async function customIntro(pi: ExtensionAPI) {
 		startupUpdatesVisible = true;
 		startupUpdateRows = 0;
 		finishIntroAnimation?.();
+		beginIntroTransition = undefined;
 		const shouldAnimate = !ctx.sessionManager
 			.getBranch()
 			.some((entry) => entry.type === "message");
 		const introProfile = resolveIntroProfile(ctx.cwd);
 
 		ctx.ui.setHeader((tui, _theme) => {
-			const usesFluid = introProfile.animation === "default-wave"
-				|| introProfile.animation === "fluid-logo-gather";
+			const galaxyMode = introProfile.animation === "fluid-logo-gather"
+				|| introProfile.animation === "galaxy-logo-on-input"
+				? introProfile.animation
+				: undefined;
+			const isGalaxyLogo = galaxyMode !== undefined;
+			const waitsForInput = galaxyMode === "galaxy-logo-on-input";
+			const usesFluid = introProfile.animation === "default-wave" || isGalaxyLogo;
 			const renderStaticLogo = introProfile.animation === "praktik-entry"
-				|| (introProfile.animation === "fluid-logo-gather" && !shouldAnimate);
+				|| (isGalaxyLogo && !shouldAnimate);
 			let animationActive = shouldAnimate;
 			let animationSettled = false;
 			let entranceFrame = shouldAnimate ? 0 : ENTRANCE_END_FRAME;
 			let timer: ReturnType<typeof setInterval> | undefined;
 			let disposed = false;
 			let fluidTransport: FluidTransport | undefined;
+			let transitionRequested = false;
 			let fluidAscii: {
 				sequence: number;
 				width: number;
@@ -276,7 +287,13 @@ export default async function customIntro(pi: ExtensionAPI) {
 				timer = undefined;
 				if (!disposed) tui.requestRender();
 			};
+			const beginTransition = () => {
+				if (transitionRequested || disposed || !animationActive) return;
+				transitionRequested = true;
+				fluidTransport?.transition();
+			};
 			finishIntroAnimation = finish;
+			beginIntroTransition = waitsForInput && shouldAnimate ? beginTransition : undefined;
 			if (shouldAnimate) {
 				timer = setInterval(() => {
 					entranceFrame += 1;
@@ -298,7 +315,7 @@ export default async function customIntro(pi: ExtensionAPI) {
 				let animationFrames: string[][] | undefined;
 				let art: string[];
 
-				if (introProfile.animation === "fluid-logo-gather") {
+				if (isGalaxyLogo) {
 					converted = imageToAscii(
 						width,
 						tui.terminal.rows,
@@ -348,11 +365,18 @@ export default async function customIntro(pi: ExtensionAPI) {
 									if (frame.phase === "settled") settle();
 									else tui.requestRender();
 								},
-								introProfile.animation === "fluid-logo-gather"
-									? { mode: "fluid-logo-gather", logoPath: SOURCE_PATH }
+								galaxyMode
+									? {
+										mode: galaxyMode,
+										logoPath: SOURCE_PATH,
+										...(waitsForInput
+											? { galaxyStyle: "living" as const, transitionEffect: "comet" as const }
+											: {}),
+									}
 									: {},
 							);
 							fluidTransport.start(pixelWidth, pixelHeight, targetWidth, targetRows);
+							if (transitionRequested) fluidTransport.transition();
 						} else {
 							fluidTransport.resize(pixelWidth, pixelHeight, targetWidth, targetRows);
 						}
@@ -457,6 +481,7 @@ export default async function customIntro(pi: ExtensionAPI) {
 				finish();
 				fluidTransport?.dispose();
 				if (finishIntroAnimation === finish) finishIntroAnimation = undefined;
+				if (beginIntroTransition === beginTransition) beginIntroTransition = undefined;
 			},
 		};
 		});

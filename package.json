@@ -1,7 +1,10 @@
 {
-  "name": "pi-custom-intro",
+  "name": "fancy-intro",
   "private": true,
   "type": "module",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
   "scripts": {
     "build:fluid": "mkdir -p bin && go build -C fluid -o ../bin/fluid-intro .",
     "preview:fluid": "npm run build:fluid && node scripts/preview-fluid.ts",

@@ -1,3 +1,3 @@
-module custom-intro/fluid
+module fancy-intro/fluid
 
 go 1.22

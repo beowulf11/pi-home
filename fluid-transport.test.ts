@@ -10,7 +10,9 @@ test("parses a complete frame", () => {
 });
 
 test("parses experiment frame phases", () => {
-	assert.equal(parseFrameLine("frame 8 1 1 /w== AA== gather")?.phase, "gather");
+	for (const phase of ["galaxy", "comet", "impact", "gather", "settled"] as const) {
+		assert.equal(parseFrameLine(`frame 8 1 1 /w== AA== ${phase}`)?.phase, phase);
+	}
 	assert.equal(parseFrameLine("frame 8 1 1 /w== AA== unknown"), undefined);
 });
 

@@ -19,11 +19,11 @@ Profiles are currently defined in `intro-config.ts`. The first configured root c
 
 | Profile | Working directory | Animation |
 |---|---|---|
-| `experiment` | `/tmp`, `/private/tmp`, or any descendant | `fluid-logo-gather` |
+| `experiment` | `/tmp`, `/private/tmp`, or any descendant | `galaxy-logo-on-input` |
 | `praktik` | `$HOME/code/praktik` or any descendant | `praktik-entry` |
-| `default` | Everything else | `fluid-logo-gather` |
+| `default` | Everything else | `galaxy-logo-on-input` |
 
-The experiment profile is intentionally the first match so `/tmp` is a permanent playground for the latest candidate. Its current finite sequence runs a procedurally generated two-arm galaxy for three seconds, transitions the same twinkling star particles through a damped curl field toward targets sampled from `source.png`, then fades into the exact responsive logo raster. The morph target receives the measured width and row count from the same `imageToAscii()` result used by the Praktik profile, so both profiles share one scaling policy. After settlement, the Go process becomes idle rather than exiting; a terminal resize sends one new target size and receives one new settled frame. While that frame is generated, the header displays the responsive Praktik conversion instead of stretching the old raster. Existing sessions show the settled logo immediately. Promising experiments can later be promoted into another profile or rotation.
+The default and experiment profiles run the living-galaxy sequence. After a randomized three-to-six-second orbit, a curved comet and trail enter automatically. Collision holds one frozen overexposed frame, then an expanding shock front physically displaces the stars before the gather begins. A sparse subset overshoots its sampled logo destinations and springs back before the exact responsive logo raster settles. The morph target receives the measured width and row count from the same `imageToAscii()` result used by the Praktik profile, so both profiles share one scaling policy. After settlement, the Go process becomes idle rather than exiting; a terminal resize sends one new target size and receives one new settled frame. Existing sessions show the settled logo immediately.
 
 The default and current experiment profiles use the galaxy-to-logo pipeline. `default-wave-animation.ts` remains an isolated fallback for startup before the first generated frame and when the local executable is absent. The retained FLIP implementation is described below. New hard-coded project profiles can be added to `INTRO_PROFILES` before a generic configuration format is introduced.
 
@@ -32,7 +32,7 @@ The default and current experiment profiles use the galaxy-to-logo pipeline. `de
 The fluid renderer deliberately separates three layers:
 
 1. `fluid/` is a minimal Go 2-D PIC/FLIP solver and occupancy rasterizer. It uses particles, staggered MAC-grid transfers, gravity/advection, pressure projection, a 95% FLIP / 5% PIC grid-to-particle update, solid tank boundaries, and grayscale particle rasterization. Water volume is conserved, two spatial-hash particle-separation passes prevent visual collapse, and particle speed is bounded for long-running stability. The scene now begins as a settled ocean over a flat seabed that rises into an invisible smooth beach on the right. Broad overlapping swells enter from the left every three seconds, shoal against that solid slope, run upward, break, and flow back. The collision floor and beach are rasterized as a restrained deterministic ASCII grain with a brighter surface ridge. The flat submerged floor remains water-colored so the ocean reaches the bottom of the canvas; only the rising right-hand shore receives the sandy land color. Raster splats scale with simulation cells so the same persistent water body remains continuous on large terminals. Source attribution to Matthias Müller's MIT-licensed Ten Minute Physics FLIP work is in `fluid/solver.go`, with the license text in `fluid/THIRD_PARTY_LICENSES.md`.
-2. `fluid-transport.ts` owns the persistent child process and line protocol. Pi sends `resize <pixelWidth> <pixelHeight>` and `stop`; Go returns `frame <sequence> <width> <height> <base64 grayscale bytes> <base64 land-mask bytes>`, optionally followed by an animation phase (`ocean`, `galaxy`, `gather`, or `settled`). Only the newest valid complete frame is retained. stderr is drained away from the TUI.
+2. `fluid-transport.ts` owns the persistent child process and line protocol. Pi sends `resize <pixelWidth> <pixelHeight>`, `transition`, and `stop`; Go returns `frame <sequence> <width> <height> <base64 grayscale bytes> <base64 land-mask bytes>`, optionally followed by an animation phase (`ocean`, `galaxy`, `comet`, `impact`, `gather`, or `settled`). Only the newest valid complete frame is retained. stderr is drained away from the TUI.
 3. `raster-to-ascii.ts` is pure TypeScript area resampling/density conversion with terminal-cell aspect compensation and optional deterministic temporal hysteresis. It independently resamples the material mask so ANSI styling cannot alter geometry or character selection.
 
 The child is started lazily by the animated header's first render, never while the extension factory loads. Its initial resize determines the stable physics grid. Later terminal resizes change only raster output dimensions, preserving normalized particle positions and velocity. The fluid canvas uses the complete terminal width and all available terminal rows except the adaptive top/bottom margins and Pi's editor/footer reservation. At 60 fps it continues for as long as the empty intro is idle, then agent start, header disposal, or session shutdown stops it idempotently. The last buffered frame remains available for the static header. The Praktik profile remains a finite entrance animation.
@@ -40,7 +40,7 @@ The child is started lazily by the animated header's first render, never while t
 Build, test, and preview locally:
 
 ```sh
-cd ~/.pi/agent/extensions/custom-intro
+cd ~/code/personal/pi/fancy-intro
 npm run build:fluid
 npm test
 npm run test:fluid
@@ -54,7 +54,7 @@ The platform executable is generated at ignored `bin/fluid-intro`; it is intenti
 The source image is:
 
 ```text
-~/.pi/agent/extensions/custom-intro/source.png
+~/code/personal/pi/fancy-intro/source.png
 ```
 
 The canonical vector source is tracked alongside it as `logo.svg`, copied from:
@@ -78,12 +78,12 @@ The stored source is trimmed to its visible bounds to avoid wasting output space
 
 Animations run once only for an empty session. For the Praktik profile, `svg-ascii-animation.ts` splits the canonical compound SVG path into its five components, rasterizes those masks once at 4× the target character resolution, moves them with bilinear fractional-pixel sampling inside one fixed clipped rectangle, and converts every full raster back through the same simple or complex density map. Frames are cached by terminal/logo size. This avoids moving rigid ASCII characters between whole cells; edge glyphs evolve as the underlying SVG crosses character boundaries. The old character translator remains only as a fallback if SVG rasterization is unavailable.
 
-The Praktik entrance and default galaxy morph complete on their normal finite timelines or when agent work begins. The retained wave mode loops continuously while the empty session is idle and stops when agent generation begins. Merely typing in the editor does not stop either animation. Timing is controlled in `logo-animation.ts` by `ENTRANCE_FPS`, `ENTRANCE_INTERVAL_MS`, `DOT_BUILD_END_FRAME`, `ARROW_ENTRY_START_FRAME`, and `ARROW_ENTRY_END_FRAME`.
+The Praktik entrance and default galaxy sequence complete on their normal finite timelines. Agent work does not interrupt the galaxy's comet, impact, or gather once launched. The retained wave mode loops continuously while the empty session is idle and stops when agent generation begins. Merely typing in the editor does not stop either animation. Timing is controlled in `logo-animation.ts` by `ENTRANCE_FPS`, `ENTRANCE_INTERVAL_MS`, `DOT_BUILD_END_FRAME`, `ARROW_ENTRY_START_FRAME`, and `ARROW_ENTRY_END_FRAME`.
 
 Render every animation frame as `.txt`, `.svg`, and `.png`, plus a PNG contact sheet, with:
 
 ```sh
-cd ~/.pi/agent/extensions/custom-intro
+cd ~/code/personal/pi/fancy-intro
 npm run render-frames -- --height 20
 npm run render-frames -- --height 18 --simple
 npm run render-frames -- --height 12 --out /tmp/praktik-frames

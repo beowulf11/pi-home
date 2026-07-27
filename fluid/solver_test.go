@@ -172,12 +172,64 @@ func TestOutputResizeDoesNotResetState(t *testing.T) {
 
 func TestGalaxyAndGatherShareTheSameBoundaryRaster(t *testing.T) {
 	s := newSolver(80, 48)
-	s.initializeGalaxy()
+	s.initializeGalaxy(galaxyClassic)
 	s.sequence = experimentGalaxyFrames
 	galaxy, _ := s.rasterGalaxy(80, 48)
 	gather, _ := s.rasterGather(80, 48, 0)
 	if !bytes.Equal(galaxy, gather) {
 		t.Fatal("galaxy-to-gather boundary changed rendering modes")
+	}
+}
+
+func TestLivingGalaxyRemainsStructuredAndFinite(t *testing.T) {
+	s := newSolver(80, 48)
+	s.initializeGalaxy(galaxyLiving)
+	for frame := 0; frame < 30*60; frame++ {
+		s.stepGalaxy(1.0 / 60)
+	}
+	roles := map[galaxyRole]int{}
+	for index, p := range s.p {
+		roles[s.galaxy[index].role]++
+		if math.IsNaN(p.x) || math.IsNaN(p.y) || p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1 {
+			t.Fatalf("invalid living galaxy particle: %+v", p)
+		}
+	}
+	if roles[galaxyCore] == 0 || roles[galaxyArm] == 0 || roles[galaxyKnot] == 0 || roles[galaxyHalo] == 0 {
+		t.Fatalf("missing galaxy roles: %#v", roles)
+	}
+	raster, _ := s.rasterGalaxy(80, 48)
+	levels := map[byte]bool{}
+	for _, value := range raster {
+		if value > 0 {
+			levels[value/32] = true
+		}
+	}
+	if len(levels) < 3 {
+		t.Fatalf("living galaxy lacks tonal depth: %d levels", len(levels))
+	}
+}
+
+func TestCometAndImpactAreDistinctAndBounded(t *testing.T) {
+	s := newSolver(80, 48)
+	s.initializeGalaxy(galaxyLiving)
+	galaxy, _ := s.rasterGalaxy(80, 48)
+	comet, _ := s.rasterComet(80, 48, .55)
+	if bytes.Equal(galaxy, comet) {
+		t.Fatal("comet did not alter galaxy raster")
+	}
+	hold, _ := s.rasterGalaxyImpactHold(80, 48)
+	if bytes.Equal(galaxy, hold) {
+		t.Fatal("impact hold did not overexpose the frozen galaxy")
+	}
+	s.stepGalaxyImpact(1.0/60, .2)
+	impact, _ := s.rasterGalaxyImpact(80, 48, .2)
+	if bytes.Equal(galaxy, impact) {
+		t.Fatal("impact did not alter galaxy raster")
+	}
+	for _, p := range s.p {
+		if math.IsNaN(p.x) || math.IsNaN(p.y) || p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1 {
+			t.Fatalf("impact produced invalid particle: %+v", p)
+		}
 	}
 }
 

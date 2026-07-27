@@ -1,7 +1,11 @@
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
 
-export type IntroAnimationId = "default-wave" | "praktik-entry" | "fluid-logo-gather";
+export type IntroAnimationId =
+	| "default-wave"
+	| "praktik-entry"
+	| "fluid-logo-gather"
+	| "galaxy-logo-on-input";
 
 export interface IntroProfile {
 	id: "default" | "praktik" | "experiment";
@@ -19,7 +23,7 @@ const EXPERIMENT_ROOTS = ["/tmp", "/private/tmp"];
 export const INTRO_PROFILES: readonly IntroProfile[] = [
 	{
 		id: "experiment",
-		animation: "fluid-logo-gather",
+		animation: "galaxy-logo-on-input",
 		roots: EXPERIMENT_ROOTS,
 	},
 	{
@@ -31,7 +35,7 @@ export const INTRO_PROFILES: readonly IntroProfile[] = [
 
 export const DEFAULT_INTRO_PROFILE: IntroProfile = {
 	id: "default",
-	animation: "fluid-logo-gather",
+	animation: "galaxy-logo-on-input",
 	roots: [],
 };
 
