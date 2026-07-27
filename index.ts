@@ -366,13 +366,22 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 					);
 					const animationKey = `${introProfile.animation}:${dimensions.width}:${dimensions.rows}`;
 					if (cachedAnimation?.key !== animationKey) {
+						// Galaxy modes wait on a persistent Go process. Keep its canvas
+						// stable but empty until the first real frame instead of briefly
+						// flashing the unrelated retained sine-wave animation.
+						const startupFrame = Array.from(
+							{ length: dimensions.rows },
+							() => " ".repeat(dimensions.width),
+						);
 						cachedAnimation = {
 							key: animationKey,
-							frames: generateDefaultWaveFrames(dimensions.width, dimensions.rows),
+							frames: isGalaxyLogo
+								? [startupFrame]
+								: generateDefaultWaveFrames(dimensions.width, dimensions.rows),
 						};
 					}
 					animationFrames = cachedAnimation.frames;
-					art = animationFrames.at(-1) ?? ["~"];
+					art = animationFrames.at(-1) ?? [""];
 
 					if (usesFluid && animationActive) {
 						const pixelWidth = dimensions.width;
