@@ -11,8 +11,11 @@ test("routes temporary directories to the latest experiment", () => {
 	assert.equal(resolveIntroProfile("/tmp-sibling").id, "default");
 });
 
-test("keeps Praktik and default profiles stable", () => {
-	assert.equal(resolveIntroProfile(join(homedir(), "code", "praktik", "computer")).id, "praktik");
+test("uses the galaxy animation for every profile", () => {
+	const praktikProfile = resolveIntroProfile(join(homedir(), "code", "praktik", "computer"));
+	assert.equal(praktikProfile.id, "praktik");
+	assert.equal(praktikProfile.animation, "galaxy-logo-on-input");
+
 	const defaultProfile = resolveIntroProfile(join(homedir(), "code", "other"));
 	assert.equal(defaultProfile.id, "default");
 	assert.equal(defaultProfile.animation, "galaxy-logo-on-input");

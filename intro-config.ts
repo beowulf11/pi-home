@@ -28,7 +28,7 @@ export const INTRO_PROFILES: readonly IntroProfile[] = [
 	},
 	{
 		id: "praktik",
-		animation: "praktik-entry",
+		animation: "galaxy-logo-on-input",
 		roots: [PRAKTIK_ROOT],
 	},
 ];
