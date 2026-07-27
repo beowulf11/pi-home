@@ -79,6 +79,7 @@ func main() {
 	settledDirty := true
 	experimentState := "galaxy"
 	experimentFrame := 0
+	liquidated := false
 	autoCometDelay := experimentCometDelayMinFrames + int(
 		time.Now().UnixNano()%int64(experimentCometDelayMaxFrames-experimentCometDelayMinFrames+1),
 	)
@@ -89,12 +90,13 @@ func main() {
 				return
 			}
 			if c.kind == "transition" {
-				// The comet module owns its 3–6 second entrance timing. A direct
-				// transition remains manually triggerable for isolated previews.
-				if *mode == "galaxy-logo-on-input" && *transitionEffect == "direct" &&
-					s != nil && experimentState == "galaxy" {
-					experimentState = "gather"
-					experimentFrame = 0
+				if *mode == "galaxy-logo-on-input" && s != nil && !s.liquidationInitialized {
+					// A submitted message liquidates whatever the intro currently shows:
+					// orbiting galaxy, comet/impact, gathering particles, or settled logo.
+					s.beginLiquidation()
+					experimentState = "liquidate"
+					liquidated = true
+					settledDirty = true
 				}
 				continue
 			}
@@ -148,6 +150,13 @@ func main() {
 					if *transitionEffect == "comet" && experimentFrame >= autoCometDelay {
 						experimentState, experimentFrame = "comet", 0
 					}
+				case "liquidate":
+					if s.stepLiquidation(1.0 / 60) {
+						experimentState = "settled"
+					} else {
+						pixels, land = s.rasterLiquid(width, height)
+						phase = "liquidate"
+					}
 				case "comet":
 					progress := float64(experimentFrame) / float64(experimentCometFrames-1)
 					s.stepGalaxy(1.0 / 60)
@@ -190,7 +199,11 @@ func main() {
 				}
 				settledDirty = false
 				s.sequence++
-				pixels, land = s.rasterLogo(width, height)
+				if liquidated {
+					pixels, land = s.rasterLiquid(width, height)
+				} else {
+					pixels, land = s.rasterLogo(width, height)
+				}
 				phase = "settled"
 			}
 			if len(accent) != width*height {

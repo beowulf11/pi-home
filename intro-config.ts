@@ -28,10 +28,10 @@ export interface IntroProfile {
 
 export const GALAXY_PRESETS: Readonly<Record<string, GalaxyVariant>> = {
 	"classic-drift": {
-		id: "classic-drift", style: "classic", transition: "direct", effects: ["starfield"],
+		id: "classic-drift", style: "classic", transition: "comet", effects: ["starfield"],
 	},
 	"living-nebula": {
-		id: "living-nebula", style: "living", transition: "direct", effects: ["nebula", "pulse"],
+		id: "living-nebula", style: "living", transition: "comet", effects: ["nebula", "pulse"],
 	},
 	"comet-trail": {
 		id: "comet-trail", style: "living", transition: "comet", effects: ["starfield"],

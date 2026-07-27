@@ -34,6 +34,8 @@ type solver struct {
 	galaxyTime                         float64
 	experimentInitialized              bool
 	galaxyImpactApplied                bool
+	liquidationInitialized             bool
+	liquidationFrames, stableFrames    int
 }
 
 func newSolver(pixelWidth, pixelHeight int) *solver {
@@ -109,6 +111,11 @@ func (s *solver) sampleVelocity(x, y float64, u, v []float64) (float64, float64)
 
 func (s *solver) terrainHeight(x float64) float64 {
 	base := 1.2 / float64(s.ny)
+	if s.liquidationInitialized {
+		// Liquidation uses only an invisible flat floor. The retained wave scene
+		// keeps its beach, but no slope or land belongs in the final intro view.
+		return base
+	}
 	t := math.Max(0, math.Min(1, (x-beachStart)/(1-beachStart)))
 	// Smoothstep avoids a sharp corner where the flat seabed meets the beach.
 	t = t * t * (3 - 2*t)
@@ -116,6 +123,9 @@ func (s *solver) terrainHeight(x float64) float64 {
 }
 
 func (s *solver) terrainSlope(x float64) float64 {
+	if s.liquidationInitialized {
+		return 0
+	}
 	t := math.Max(0, math.Min(1, (x-beachStart)/(1-beachStart)))
 	return (beachTop - 1.2/float64(s.ny)) * 6 * t * (1 - t) / (1 - beachStart)
 }
@@ -202,7 +212,16 @@ func (s *solver) separateParticles() {
 }
 
 func (s *solver) step(dt float64) {
-	s.applyWaveMaker(dt)
+	s.stepPhysics(dt, true, 1)
+}
+
+// stepPhysics advances the liquid without inventing energy. The looping ocean
+// opts into its wave maker; liquidation supplies only its one-time impulse and
+// uses damping so it can come permanently to rest.
+func (s *solver) stepPhysics(dt float64, makeWaves bool, damping float64) {
+	if makeWaves {
+		s.applyWaveMaker(dt)
+	}
 	clear(s.u)
 	clear(s.v)
 	clear(s.weightU)
@@ -335,6 +354,8 @@ func (s *solver) step(dt float64) {
 			p.vx *= maxParticleSpeed / speed
 			p.vy *= maxParticleSpeed / speed
 		}
+		p.vx *= damping
+		p.vy *= damping
 		p.x += p.vx * dt
 		p.y += p.vy * dt
 		margin := 1.2 / float64(s.nx)
@@ -372,30 +393,38 @@ func (s *solver) step(dt float64) {
 }
 
 func (s *solver) raster(width, height int) ([]byte, []byte) {
+	return s.rasterView(width, height, true)
+}
+
+// rasterLiquid renders particles only. Collision boundaries remain a physics
+// detail: no floor grain, beach, wall, or land material is painted.
+func (s *solver) rasterLiquid(width, height int) ([]byte, []byte) {
+	return s.rasterView(width, height, false)
+}
+
+func (s *solver) rasterView(width, height int, includeTerrain bool) ([]byte, []byte) {
 	out := make([]byte, width*height)
 	land := make([]byte, width*height)
-	// Render the otherwise invisible collision terrain as a restrained,
-	// deterministic grain. The brighter surface ridge keeps the shoreline
-	// readable while the lower-density interior remains visually secondary.
-	widthScale := float64(max(1, width-1))
-	heightScale := float64(max(1, height-1))
-	surfaceBand := 1.5 / heightScale
-	for y := 0; y < height; y++ {
-		worldY := 1 - float64(y)/heightScale
-		for x := 0; x < width; x++ {
-			floor := s.terrainHeight(float64(x) / widthScale)
-			if worldY > floor {
-				continue
-			}
-			grain := byte(72 + ((x*37 + y*61 + x*y*7) % 54))
-			if floor-worldY < surfaceBand {
-				grain = 168
-			}
-			out[y*width+x] = grain
-			// The flat tank floor stays visually part of the water silhouette.
-			// Only the rising right-hand beach receives the sand material.
-			if float64(x)/widthScale > beachStart {
-				land[y*width+x] = 255
+	if includeTerrain {
+		// The legacy wave view deliberately exposes its collision terrain.
+		widthScale := float64(max(1, width-1))
+		heightScale := float64(max(1, height-1))
+		surfaceBand := 1.5 / heightScale
+		for y := 0; y < height; y++ {
+			worldY := 1 - float64(y)/heightScale
+			for x := 0; x < width; x++ {
+				floor := s.terrainHeight(float64(x) / widthScale)
+				if worldY > floor {
+					continue
+				}
+				grain := byte(72 + ((x*37 + y*61 + x*y*7) % 54))
+				if floor-worldY < surfaceBand {
+					grain = 168
+				}
+				out[y*width+x] = grain
+				if float64(x)/widthScale > beachStart {
+					land[y*width+x] = 255
+				}
 			}
 		}
 	}

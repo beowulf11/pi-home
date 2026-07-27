@@ -3,6 +3,7 @@ package main
 import (
 	"image/png"
 	"math"
+	"math/rand/v2"
 	"os"
 	"sort"
 	"strings"
@@ -16,6 +17,10 @@ const (
 	experimentImpactHoldFrames    = 1
 	experimentImpactFrames        = 18
 	experimentGatherFrames        = 210
+	liquidationMinFrames          = 120
+	liquidationMaxFrames          = 420
+	liquidationStableFrames       = 30
+	liquidationStableSpeed        = .04
 )
 
 type point struct{ x, y float64 }
@@ -221,6 +226,73 @@ func hashUnit(value int) float64 {
 	x = ((x >> ((x >> 28) + 4)) ^ x) * 277803737
 	x = (x >> 22) ^ x
 	return float64(x) / float64(^uint32(0))
+}
+
+// beginLiquidation treats an invisible randomized force object as a spatial
+// field, not as a visible projectile. Its offset center, travel bias, swirl and
+// strength give every particle a related but different one-time velocity. The
+// result is a coherent burst rather than either uniform motion or white noise.
+func (s *solver) beginLiquidation() {
+	if s.liquidationInitialized {
+		return
+	}
+	s.liquidationInitialized = true
+	s.liquidationFrames = 0
+	s.stableFrames = 0
+	centerX := .5 + (rand.Float64()-.5)*.24
+	centerY := .53 + (rand.Float64()-.5)*.20
+	travelAngle := rand.Float64() * 2 * math.Pi
+	travelX, travelY := math.Cos(travelAngle), math.Sin(travelAngle)
+	strength := .72 + rand.Float64()*.68
+	swirl := .35 + rand.Float64()*.5
+	if rand.Float64() < .5 {
+		swirl = -swirl
+	}
+	for index := range s.p {
+		p := &s.p[index]
+		dx, dy := p.x-centerX, p.y-centerY
+		distance := math.Max(.025, math.Hypot(dx, dy))
+		normalX, normalY := dx/distance, dy/distance
+		// Radial displacement varies across the silhouette, travel gives the
+		// burst a shared gesture, and tangent motion bends it into a fluid arc.
+		velocityX := normalX*.72 + travelX*.28 - normalY*swirl
+		velocityY := normalY*.72 + travelY*.28 + normalX*swirl
+		velocityLength := math.Hypot(velocityX, velocityY)
+		velocityX, velocityY = velocityX/velocityLength, velocityY/velocityLength
+		variation := (rand.Float64() - .5) * .42
+		cosine, sine := math.Cos(variation), math.Sin(variation)
+		velocityX, velocityY = velocityX*cosine-velocityY*sine, velocityX*sine+velocityY*cosine
+		falloff := .55 + .45*math.Exp(-distance/.30)
+		particleStrength := strength * falloff * (.78 + rand.Float64()*.44)
+		p.vx = p.vx*.08 + velocityX*particleStrength
+		p.vy = p.vy*.08 + velocityY*particleStrength
+	}
+}
+
+// stepLiquidation returns true once the water has stayed quiet long enough.
+// A finite upper bound guarantees that the intro cannot keep repainting due to
+// tiny residual numerical velocities.
+func (s *solver) stepLiquidation(dt float64) bool {
+	s.beginLiquidation()
+	s.stepPhysics(dt, false, .96)
+	s.liquidationFrames++
+	maximumSpeed := 0.0
+	for index := range s.p {
+		maximumSpeed = math.Max(maximumSpeed, math.Hypot(s.p[index].vx, s.p[index].vy))
+	}
+	if s.liquidationFrames >= liquidationMinFrames && maximumSpeed < liquidationStableSpeed {
+		s.stableFrames++
+	} else {
+		s.stableFrames = 0
+	}
+	settled := s.stableFrames >= liquidationStableFrames || s.liquidationFrames >= liquidationMaxFrames
+	if settled {
+		for index := range s.p {
+			s.p[index].vx = 0
+			s.p[index].vy = 0
+		}
+	}
+	return settled
 }
 
 // initializeGalaxy repurposes the fluid markers as a deterministic two-arm

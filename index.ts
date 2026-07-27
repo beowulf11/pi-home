@@ -233,10 +233,12 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 
 	pi.on("input", (_event, ctx) => {
 		hideStartupUpdates(ctx);
-		beginIntroTransition?.();
 	});
 
-	pi.on("agent_start", (_event, ctx) => {
+	// This event runs only after a submitted prompt has passed input handling and
+	// is about to become an agent turn. Editing text or running a handled command
+	// therefore cannot liquidate the intro.
+	pi.on("before_agent_start", (_event, ctx) => {
 		hideStartupUpdates(ctx);
 		if (beginIntroTransition) beginIntroTransition();
 		else finishIntroAnimation?.();
@@ -279,6 +281,8 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 			let disposed = false;
 			let fluidTransport: FluidTransport | undefined;
 			let transitionRequested = false;
+			let liquidationSeen = false;
+			let liquidView = false;
 			let fluidAscii: {
 				sequence: number;
 				width: number;
@@ -396,6 +400,9 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 						}
 					}
 					const latest = fluidTransport?.latestFrame;
+					if (latest?.phase === "liquidate") liquidationSeen = true;
+					liquidView = liquidationSeen
+						&& (latest?.phase === "liquidate" || latest?.phase === "settled");
 					const latestMatchesViewport = latest?.width === dimensions.width
 						&& latest.height === dimensions.rows * 2;
 					if (latest && latestMatchesViewport && (latest.sequence !== fluidAscii?.sequence
@@ -442,7 +449,7 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 					tui.terminal.rows - art.length - reservedRows - margin * 2,
 				);
 				const topPadding = margin + Math.floor(flexiblePadding / 2);
-				const bottomPadding = margin + Math.ceil(flexiblePadding / 2);
+				let bottomPadding = margin + Math.ceil(flexiblePadding / 2);
 				const artCanvasWidth = art.reduce(
 					(maximum, line) => Math.max(maximum, visibleWidth(line)),
 					0,
@@ -484,6 +491,17 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 					} else {
 						renderedArt = animateLogoEntrance(art, entranceFrame);
 					}
+				}
+				if (liquidView) {
+					// The general intro layout reserves an aesthetic bottom margin, and
+					// the fluid raster can contain blank pixels below its invisible floor.
+					// Neither belongs in the borderless liquidation view.
+					let lastVisibleRow = renderedArt.length - 1;
+					while (lastVisibleRow >= 0 && renderedArt[lastVisibleRow]?.trim() === "") {
+						lastVisibleRow -= 1;
+					}
+					renderedArt = renderedArt.slice(0, lastVisibleRow + 1);
+					bottomPadding = 0;
 				}
 				return [
 					...Array.from({ length: topPadding }, () => ""),

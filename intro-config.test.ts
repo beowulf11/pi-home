@@ -34,7 +34,9 @@ test("parses named and composable galaxy routes", () => {
 
 test("selects one route or honors an explicit combination", () => {
 	const profile = resolveIntroProfile("/tmp/project");
-	assert.equal(resolveGalaxyVariant(profile, undefined, () => 0).id, "classic-drift");
+	const firstPreset = resolveGalaxyVariant(profile, undefined, () => 0);
+	assert.equal(firstPreset.id, "classic-drift");
+	assert.equal(firstPreset.transition, "comet");
 	assert.equal(resolveGalaxyVariant(profile, undefined, () => .999).id, "cosmic-storm");
 	assert.equal(
 		resolveGalaxyVariant(profile, "living/direct/nebula+pulse", () => 0).id,

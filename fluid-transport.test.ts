@@ -22,7 +22,7 @@ test("parses comet head and tail accents", () => {
 });
 
 test("parses experiment frame phases", () => {
-	for (const phase of ["galaxy", "comet", "impact", "gather", "settled"] as const) {
+	for (const phase of ["galaxy", "comet", "impact", "gather", "liquidate", "settled"] as const) {
 		assert.equal(parseFrameLine(`frame 8 1 1 /w== AA== ${phase}`)?.phase, phase);
 	}
 	assert.equal(parseFrameLine("frame 8 1 1 /w== AA== unknown"), undefined);

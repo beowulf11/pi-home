@@ -170,6 +170,77 @@ func TestOutputResizeDoesNotResetState(t *testing.T) {
 	}
 }
 
+func TestLiquidationViewHasNoTerrainOrLand(t *testing.T) {
+	s := newSolver(80, 40)
+	s.initializeGalaxy(galaxyLiving)
+	s.beginLiquidation()
+	if s.terrainHeight(.1) != s.terrainHeight(.9) || s.terrainSlope(.9) != 0 {
+		t.Fatal("liquidation retained the wave scene's beach geometry")
+	}
+	s.p = nil // isolate anything painted independently of the liquid
+	pixels, land := s.rasterLiquid(120, 60)
+	for index := range pixels {
+		if pixels[index] != 0 || land[index] != 0 {
+			t.Fatalf("liquidation view painted terrain at pixel %d", index)
+		}
+	}
+}
+
+func TestLiquidationInitializesOneForceFieldAndEventuallySettles(t *testing.T) {
+	s := newSolver(48, 24)
+	s.initializeGalaxy(galaxyLiving)
+	for frame := 0; frame < 30; frame++ {
+		s.stepGalaxy(1.0 / 60)
+	}
+	positions := make([]point, len(s.p))
+	for index, p := range s.p {
+		positions[index] = point{x: p.x, y: p.y}
+	}
+	s.beginLiquidation()
+	velocities := make([]point, len(s.p))
+	differentDirections := 0
+	for index, p := range s.p {
+		if p.x != positions[index].x || p.y != positions[index].y {
+			t.Fatal("liquidation moved a particle before physics began")
+		}
+		velocities[index] = point{x: p.vx, y: p.vy}
+		if index > 0 {
+			first := velocities[0]
+			dot := (first.x*p.vx + first.y*p.vy) /
+				(math.Hypot(first.x, first.y) * math.Hypot(p.vx, p.vy))
+			if dot < .85 {
+				differentDirections++
+			}
+		}
+	}
+	if differentDirections < len(s.p)/3 {
+		t.Fatalf("force field moved too uniformly: %d/%d directions differ", differentDirections, len(s.p))
+	}
+	s.beginLiquidation()
+	for index, p := range s.p {
+		if p.vx != velocities[index].x || p.vy != velocities[index].y {
+			t.Fatal("repeated liquidation initialized another random force field")
+		}
+	}
+
+	settled := false
+	for frame := 0; frame < liquidationMaxFrames; frame++ {
+		if s.stepLiquidation(1.0 / 60) {
+			settled = true
+			break
+		}
+	}
+	if !settled {
+		t.Fatal("liquidation did not stop within its finite frame budget")
+	}
+	for _, p := range s.p {
+		if p.vx != 0 || p.vy != 0 || math.IsNaN(p.x) || math.IsNaN(p.y) ||
+			p.x < 0 || p.x > 1 || p.y < s.terrainHeight(p.x) || p.y > 1 {
+			t.Fatalf("invalid settled liquid particle: %+v", p)
+		}
+	}
+}
+
 func TestGalaxyAndGatherShareTheSameBoundaryRaster(t *testing.T) {
 	s := newSolver(80, 48)
 	s.initializeGalaxy(galaxyClassic)

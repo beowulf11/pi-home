@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type { GalaxyEffect, GalaxyStyle, GalaxyTransition } from "./intro-config.ts";
 
-export type FluidPhase = "ocean" | "galaxy" | "comet" | "impact" | "gather" | "settled";
+export type FluidPhase = "ocean" | "galaxy" | "comet" | "impact" | "gather" | "liquidate" | "settled";
 
 export interface FluidFrame {
 	sequence: number;
@@ -25,7 +25,7 @@ export interface FluidTransportOptions {
 }
 
 export function parseFrameLine(line: string): FluidFrame | undefined {
-	const match = line.match(/^frame (\d+) ([1-9]\d*) ([1-9]\d*) ([A-Za-z0-9+/]+={0,2}) ([A-Za-z0-9+/]+={0,2})(?: (ocean|galaxy|comet|impact|gather|settled)| ([A-Za-z0-9+/]+={0,2})(?: (ocean|galaxy|comet|impact|gather|settled))?)?$/);
+	const match = line.match(/^frame (\d+) ([1-9]\d*) ([1-9]\d*) ([A-Za-z0-9+/]+={0,2}) ([A-Za-z0-9+/]+={0,2})(?: (ocean|galaxy|comet|impact|gather|liquidate|settled)| ([A-Za-z0-9+/]+={0,2})(?: (ocean|galaxy|comet|impact|gather|liquidate|settled))?)?$/);
 	if (!match) return undefined;
 	const sequence = Number(match[1]);
 	const width = Number(match[2]);
