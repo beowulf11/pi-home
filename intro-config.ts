@@ -1,21 +1,27 @@
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
 
-export type IntroAnimationId = "default-wave" | "praktik-entry";
+export type IntroAnimationId = "default-wave" | "praktik-entry" | "fluid-logo-gather";
 
 export interface IntroProfile {
-	id: "default" | "praktik";
+	id: "default" | "praktik" | "experiment";
 	animation: IntroAnimationId;
 	roots: string[];
 }
 
-const PRAKTIK_ROOT = resolve(homedir(), "code", "praktik");
+const PRAKTIK_ROOT = resolve(process.env.HOME ?? homedir(), "code", "praktik");
+const EXPERIMENT_ROOTS = ["/tmp", "/private/tmp"];
 
 /**
  * Hard-coded for now. Put more specific profiles before the default profile;
  * the first root containing the Pi session cwd wins.
  */
 export const INTRO_PROFILES: readonly IntroProfile[] = [
+	{
+		id: "experiment",
+		animation: "fluid-logo-gather",
+		roots: EXPERIMENT_ROOTS,
+	},
 	{
 		id: "praktik",
 		animation: "praktik-entry",
@@ -25,7 +31,7 @@ export const INTRO_PROFILES: readonly IntroProfile[] = [
 
 export const DEFAULT_INTRO_PROFILE: IntroProfile = {
 	id: "default",
-	animation: "default-wave",
+	animation: "fluid-logo-gather",
 	roots: [],
 };
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"math"
 	"testing"
 )
@@ -166,5 +167,75 @@ func TestOutputResizeDoesNotResetState(t *testing.T) {
 	_, _ = s.raster(80, 40)
 	if s.sequence != sequence || s.p[0] != particle {
 		t.Fatal("raster resize mutated simulation")
+	}
+}
+
+func TestGalaxyAndGatherShareTheSameBoundaryRaster(t *testing.T) {
+	s := newSolver(80, 48)
+	s.initializeGalaxy()
+	s.sequence = experimentGalaxyFrames
+	galaxy, _ := s.rasterGalaxy(80, 48)
+	gather, _ := s.rasterGather(80, 48, 0)
+	if !bytes.Equal(galaxy, gather) {
+		t.Fatal("galaxy-to-gather boundary changed rendering modes")
+	}
+}
+
+func TestLogoTargetRetainsAspectAcrossViewports(t *testing.T) {
+	source, err := loadLogoSource("../source.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, viewport := range [][2]int{{80, 48}, {170, 56}, {170, 180}, {300, 200}} {
+		target := source.target(viewport[0], viewport[1], 0, 0)
+		minX, minY, maxX, maxY := viewport[0], viewport[1], -1, -1
+		for index, alpha := range target {
+			if alpha == 0 {
+				continue
+			}
+			x, y := index%viewport[0], index/viewport[0]
+			minX, minY = min(minX, x), min(minY, y)
+			maxX, maxY = max(maxX, x), max(maxY, y)
+		}
+		width, height := maxX-minX+1, maxY-minY+1
+		if width <= 0 || height <= 0 || math.Abs(float64(width)/float64(height)-1) > .03 {
+			t.Fatalf("viewport %v distorted target to %dx%d", viewport, width, height)
+		}
+	}
+}
+
+func TestFluidLogoGatherConvergesOnResponsiveTarget(t *testing.T) {
+	source, err := loadLogoSource("../source.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const width, height = 80, 48
+	target := source.target(width, height, 0, 0)
+	s := newSolver(width, height)
+	s.setLogoTarget(target, width, height)
+	if len(s.targets) != len(s.p) {
+		t.Fatalf("targets=%d particles=%d", len(s.targets), len(s.p))
+	}
+	errorAt := func() float64 {
+		total := 0.0
+		for index, p := range s.p {
+			target := s.targets[index]
+			total += math.Hypot(p.x-target.x, p.y-target.y)
+		}
+		return total / float64(len(s.p))
+	}
+	before := errorAt()
+	for frame := 0; frame < experimentGatherFrames; frame++ {
+		s.stepLogoGather(1.0/60, float64(frame)/float64(experimentGatherFrames-1))
+	}
+	after := errorAt()
+	if after >= before*.08 {
+		t.Fatalf("gather did not converge enough: %.4f -> %.4f", before, after)
+	}
+	pixels, land := s.rasterLogo(width, height)
+	for index := range target {
+		if pixels[index] != target[index] || land[index] != 0 {
+			t.Fatalf("settled raster differs at pixel %d", index)
+		}
 	}
 }

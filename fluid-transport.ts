@@ -1,5 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
+export type FluidPhase = "ocean" | "galaxy" | "gather" | "settled";
+
 export interface FluidFrame {
 	sequence: number;
 	width: number;
@@ -7,10 +9,16 @@ export interface FluidFrame {
 	pixels: Uint8Array;
 	/** 255 for visible land, 0 for water/air at each source pixel. */
 	land: Uint8Array;
+	phase?: FluidPhase;
+}
+
+export interface FluidTransportOptions {
+	mode?: "default" | "fluid-logo-gather";
+	logoPath?: string;
 }
 
 export function parseFrameLine(line: string): FluidFrame | undefined {
-	const match = line.match(/^frame (\d+) ([1-9]\d*) ([1-9]\d*) ([A-Za-z0-9+/]+={0,2}) ([A-Za-z0-9+/]+={0,2})$/);
+	const match = line.match(/^frame (\d+) ([1-9]\d*) ([1-9]\d*) ([A-Za-z0-9+/]+={0,2}) ([A-Za-z0-9+/]+={0,2})(?: (ocean|galaxy|gather|settled))?$/);
 	if (!match) return undefined;
 	const sequence = Number(match[1]);
 	const width = Number(match[2]);
@@ -30,6 +38,7 @@ export function parseFrameLine(line: string): FluidFrame | undefined {
 		height,
 		pixels: new Uint8Array(pixels),
 		land: new Uint8Array(land),
+		phase: match[6] as FluidPhase | undefined,
 	};
 }
 
@@ -40,17 +49,26 @@ export class FluidTransport {
 	private lastResize = "";
 	private readonly executable: string;
 	private readonly onFrame: (frame: FluidFrame) => void;
+	private readonly options: FluidTransportOptions;
 	latestFrame: FluidFrame | undefined;
 
-	constructor(executable: string, onFrame: (frame: FluidFrame) => void) {
+	constructor(
+		executable: string,
+		onFrame: (frame: FluidFrame) => void,
+		options: FluidTransportOptions = {},
+	) {
 		this.executable = executable;
 		this.onFrame = onFrame;
+		this.options = options;
 	}
 
-	start(pixelWidth: number, pixelHeight: number): void {
+	start(pixelWidth: number, pixelHeight: number, logoWidth?: number, logoRows?: number): void {
 		if (this.disposed || this.child) return;
 		try {
-			const child = spawn(this.executable, [], { stdio: ["pipe", "pipe", "pipe"] });
+			const args = this.options.mode === "fluid-logo-gather"
+				? ["--mode", "fluid-logo-gather", "--logo", this.options.logoPath ?? ""]
+				: [];
+			const child = spawn(this.executable, args, { stdio: ["pipe", "pipe", "pipe"] });
 			this.child = child;
 			child.stdin.on("error", () => {});
 			child.stdout.setEncoding("utf8");
@@ -63,16 +81,20 @@ export class FluidTransport {
 			child.on("exit", () => {
 				if (this.child === child) this.child = undefined;
 			});
-			this.resize(pixelWidth, pixelHeight);
+			this.resize(pixelWidth, pixelHeight, logoWidth, logoRows);
 		} catch {
 			this.child = undefined;
 		}
 	}
 
-	resize(pixelWidth: number, pixelHeight: number): void {
+	resize(pixelWidth: number, pixelHeight: number, logoWidth?: number, logoRows?: number): void {
 		const width = Math.max(1, Math.floor(pixelWidth));
 		const height = Math.max(1, Math.floor(pixelHeight));
-		const command = `resize ${width} ${height}`;
+		const targetWidth = logoWidth === undefined ? undefined : Math.max(1, Math.floor(logoWidth));
+		const targetRows = logoRows === undefined ? undefined : Math.max(1, Math.floor(logoRows));
+		const command = targetWidth !== undefined && targetRows !== undefined
+			? `resize ${width} ${height} ${targetWidth} ${targetRows}`
+			: `resize ${width} ${height}`;
 		if (command === this.lastResize) return;
 		this.lastResize = command;
 		if (this.child?.stdin.writable) this.child.stdin.write(`${command}\n`);

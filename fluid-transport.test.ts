@@ -5,8 +5,13 @@ import { FluidTransport, parseFrameLine } from "./fluid-transport.ts";
 test("parses a complete frame", () => {
 	const frame = parseFrameLine("frame 7 2 2 AAECAw== /wD/AA==");
 	assert.deepEqual(frame && { ...frame, pixels: [...frame.pixels], land: [...frame.land] }, {
-		sequence: 7, width: 2, height: 2, pixels: [0, 1, 2, 3], land: [255, 0, 255, 0],
+		sequence: 7, width: 2, height: 2, pixels: [0, 1, 2, 3], land: [255, 0, 255, 0], phase: undefined,
 	});
+});
+
+test("parses experiment frame phases", () => {
+	assert.equal(parseFrameLine("frame 8 1 1 /w== AA== gather")?.phase, "gather");
+	assert.equal(parseFrameLine("frame 8 1 1 /w== AA== unknown"), undefined);
 });
 
 test("rejects malformed and dimension-mismatched frames", () => {

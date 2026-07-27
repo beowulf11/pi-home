@@ -245,8 +245,12 @@ export default async function customIntro(pi: ExtensionAPI) {
 		const introProfile = resolveIntroProfile(ctx.cwd);
 
 		ctx.ui.setHeader((tui, _theme) => {
-			const continuouslyAnimate = shouldAnimate && introProfile.animation === "default-wave";
+			const usesFluid = introProfile.animation === "default-wave"
+				|| introProfile.animation === "fluid-logo-gather";
+			const renderStaticLogo = introProfile.animation === "praktik-entry"
+				|| (introProfile.animation === "fluid-logo-gather" && !shouldAnimate);
 			let animationActive = shouldAnimate;
+			let animationSettled = false;
 			let entranceFrame = shouldAnimate ? 0 : ENTRANCE_END_FRAME;
 			let timer: ReturnType<typeof setInterval> | undefined;
 			let disposed = false;
@@ -266,17 +270,23 @@ export default async function customIntro(pi: ExtensionAPI) {
 				fluidTransport?.stop();
 				if (!disposed) tui.requestRender();
 			};
+			const settle = () => {
+				animationSettled = true;
+				if (timer) clearInterval(timer);
+				timer = undefined;
+				if (!disposed) tui.requestRender();
+			};
 			finishIntroAnimation = finish;
 			if (shouldAnimate) {
 				timer = setInterval(() => {
 					entranceFrame += 1;
-					if (!continuouslyAnimate && entranceFrame >= ENTRANCE_END_FRAME) {
+					if (!usesFluid && entranceFrame >= ENTRANCE_END_FRAME) {
 						finish();
 						return;
 					}
-					// The Go process drives renders once fluid frames arrive. Keep this
-					// timer only as the one-shot logo clock or procedural-wave fallback.
-					if (!continuouslyAnimate || !fluidTransport?.latestFrame) tui.requestRender();
+					// The Go process drives fluid renders once frames arrive. This timer
+					// remains only for the one-shot logo and startup fallback frames.
+					if (!usesFluid || !fluidTransport?.latestFrame) tui.requestRender();
 				}, ENTRANCE_INTERVAL_MS);
 				timer.unref?.();
 			}
@@ -288,8 +298,16 @@ export default async function customIntro(pi: ExtensionAPI) {
 				let animationFrames: string[][] | undefined;
 				let art: string[];
 
-				if (introProfile.animation === "praktik-entry") {
+				if (introProfile.animation === "fluid-logo-gather") {
 					converted = imageToAscii(
+						width,
+						tui.terminal.rows,
+						startupUpdateRows,
+						margin,
+					);
+				}
+				if (renderStaticLogo) {
+					converted ??= imageToAscii(
 						width,
 						tui.terminal.rows,
 						startupUpdateRows,
@@ -314,20 +332,35 @@ export default async function customIntro(pi: ExtensionAPI) {
 					animationFrames = cachedAnimation.frames;
 					art = animationFrames.at(-1) ?? ["~"];
 
-					if (continuouslyAnimate && animationActive) {
+					if (usesFluid && animationActive) {
 						const pixelWidth = dimensions.width;
 						const pixelHeight = dimensions.rows * 2;
+						const targetWidth = converted?.lines.reduce(
+							(maximum, line) => Math.max(maximum, visibleWidth(line)),
+							0,
+						);
+						const targetRows = converted?.lines.length;
 						if (!fluidTransport) {
-							fluidTransport = new FluidTransport(FLUID_EXECUTABLE, () => {
-								if (!disposed && animationActive) tui.requestRender();
-							});
-							fluidTransport.start(pixelWidth, pixelHeight);
+							fluidTransport = new FluidTransport(
+								FLUID_EXECUTABLE,
+								(frame) => {
+									if (disposed || !animationActive) return;
+									if (frame.phase === "settled") settle();
+									else tui.requestRender();
+								},
+								introProfile.animation === "fluid-logo-gather"
+									? { mode: "fluid-logo-gather", logoPath: SOURCE_PATH }
+									: {},
+							);
+							fluidTransport.start(pixelWidth, pixelHeight, targetWidth, targetRows);
 						} else {
-							fluidTransport.resize(pixelWidth, pixelHeight);
+							fluidTransport.resize(pixelWidth, pixelHeight, targetWidth, targetRows);
 						}
 					}
 					const latest = fluidTransport?.latestFrame;
-					if (latest && (latest.sequence !== fluidAscii?.sequence
+					const latestMatchesViewport = latest?.width === dimensions.width
+						&& latest.height === dimensions.rows * 2;
+					if (latest && latestMatchesViewport && (latest.sequence !== fluidAscii?.sequence
 						|| dimensions.width !== fluidAscii.width
 						|| dimensions.rows !== fluidAscii.rows)) {
 						fluidAscii = {
@@ -352,6 +385,10 @@ export default async function customIntro(pi: ExtensionAPI) {
 						};
 					}
 					if (fluidAscii) art = fluidAscii.lines;
+					if (animationSettled && !latestMatchesViewport && converted) {
+						art = converted.lines;
+						fluidAscii = undefined;
+					}
 				}
 
 				const reservedRows = EDITOR_FOOTER_ROWS + startupUpdateRows;
@@ -368,11 +405,14 @@ export default async function customIntro(pi: ExtensionAPI) {
 				let renderedArt = art;
 				let renderedLand: boolean[][] | undefined;
 				if (shouldAnimate) {
-					if (introProfile.animation === "default-wave") {
+					if (usesFluid) {
 						const fallbackFrame = animationFrames && animationFrames.length > 0
 							? entranceFrame % animationFrames.length
 							: 0;
-						renderedArt = fluidAscii?.lines ?? animationFrames?.[fallbackFrame] ?? art;
+						renderedArt = fluidAscii?.lines
+							?? (animationSettled ? converted?.lines : undefined)
+							?? animationFrames?.[fallbackFrame]
+							?? art;
 						renderedLand = fluidAscii?.land;
 					} else if (converted) {
 						try {
