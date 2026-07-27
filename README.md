@@ -22,25 +22,29 @@ Profiles are currently defined in `intro-config.ts`. The first configured root c
 | `praktik` | `$HOME/code/praktik` or any descendant | `galaxy-logo-on-input` + rotating 3-D logo |
 | `default` | Everything else | `galaxy-logo-on-input` + rotating 3-D logo |
 
-Every displayed intro picks one preset route and keeps it stable across renders/resizes. The next session can pick another. The built-in routes are:
+Every displayed intro picks one preset route and keeps it stable across renders/resizes. The next session can pick another. Every route uses the same current galaxy renderer: four logarithmic density-wave arms, a softened differential rotation curve, epicyclic motion, bright star-forming knots, dim leading dust particles, carved dust lanes, arm-aligned procedural nebulae, and a multi-scale central bulge. These are deliberately analytic rather than a costly N-body solve: at terminal resolution they retain the structure and visual cues of the reviewed GPU simulations without adding GPU/browser infrastructure or destabilizing the timed logo transition. The broad arm light uses screen compositing so nebula and deep-field layers remain visible instead of being overwritten. Deep-field stars are members of the same persistent particle set as the galaxy, so they participate in impact, gathering, and liquidation rather than looking stranded around the forming logo. Continuous nebulae and transient shooting-star trails remain raster-only scenery and fade at the start of gathering; particleizing those fields would unnecessarily inflate the later logo and liquid volume.
 
-| Preset | Galaxy | Transition | Combined ambient effects |
-|---|---|---|---|
-| `classic-drift` | classic | timed comet/impact | starfield |
-| `living-nebula` | living | timed comet/impact | nebula + nucleus pulse |
-| `comet-trail` | living | timed comet/impact | starfield |
-| `meteor-shower` | living | timed comet/impact | starfield + shooting stars |
-| `cosmic-storm` | living | timed comet/impact | nebula + starfield + shooting stars + pulse |
+The built-in routes are:
+
+| Preset | Transition | Combined ambient effects |
+|---|---|---|
+| `deep-field` | timed comet/impact | starfield |
+| `spiral-nebula` | timed comet/impact | nebula + nucleus pulse |
+| `comet-trail` | timed comet/impact | starfield |
+| `meteor-shower` | timed comet/impact | starfield + shooting stars |
+| `cosmic-storm` | timed comet/impact | nebula + starfield + shooting stars + pulse |
 
 Set `PI_GALAXY_VARIANT` to force either a preset or a composable path. For example:
 
 ```sh
 PI_GALAXY_VARIANT=meteor-shower pi
-PI_GALAXY_VARIANT='classic/direct/nebula+starfield' pi
-PI_GALAXY_VARIANT='living/comet/nebula+shooting-stars+pulse' pi
+PI_GALAXY_VARIANT='direct/nebula+starfield' pi
+PI_GALAXY_VARIANT='comet/nebula+shooting-stars+pulse' pi
 ```
 
-A custom path is `style/transition/effect+effect`: styles are `classic` and `living`; transitions are `direct` and `comet`; effects are `nebula`, `starfield`, `shooting-stars`, and `pulse`. Invalid paths fall back to the profile's random preset pool. Preset pools can be customized per profile with `galaxyVariants` in `intro-config.ts`.
+A custom path is `transition/effect+effect`: transitions are `direct` and `comet`; effects are `nebula`, `starfield`, `shooting-stars`, and `pulse`. The galaxy implementation itself is no longer selectable, so every preset and custom route uses the current setup. Invalid paths fall back to the profile's random preset pool. Preset pools can be customized per profile with `galaxyVariants` in `intro-config.ts`.
+
+Design references for the enhanced galaxy are [Galacto](https://github.com/tre-systems/galacto) (rotation curves, disk structure, stable integration concepts), [Mavity](https://github.com/mavity/mavity) (scalable particle-system architecture), [WebGPU Galaxy](https://github.com/dgreenheck/webgpu-galaxy) (layered particles and dust), and [Galaxy Explorer](https://github.com/zjoooooo/galaxy-explorer) (density-wave arms, procedural nebulae, and performance-aware visual layering). No source code was copied; the local implementation remains a purpose-built deterministic Go raster simulation.
 
 The original intro sequence remains intact: every built-in preset runs `galaxy → comet → impact → logo` (an explicitly forced custom `direct` route remains available for debugging). A submitted message then liquidates whichever particle state is currently visible in place. Each run creates an invisible randomized force field with a slightly offset center, directional bias, swirl, and strength. At the instant of liquidation it gives every particle a related but spatially different velocity, producing a coherent curved burst instead of uniform movement or unrelated noise. The force is applied only once and is never rendered; afterward only gravity, pressure, collisions, and damping act on the liquid, with no later random forces. Liquidation has its own clean particle-only view and an invisible flat collision floor: it does not render the legacy wave scene's floor grain, side walls, beach slope, or sandy land material. The water falls into the bottom of the viewport, stabilizes, emits one final `settled` frame, and leaves the Go process idle. Liquidation starts only after a submitted message reaches `before_agent_start`; editing text, waiting on the intro, or running a handled command does not trigger it. A terminal resize requests one updated settled frame.
 
@@ -63,7 +67,7 @@ cd ~/code/personal/pi/fancy-intro
 npm run build:fluid
 npm test
 npm run test:fluid
-npm run preview:fluid          # optional: ... -- 64 20 galaxy-logo-on-input 180 living comet nebula,starfield,pulse
+npm run preview:fluid          # optional: ... -- 64 20 galaxy-logo-on-input 180 comet nebula,starfield,pulse
 ```
 
 The platform executable is generated at ignored `bin/fluid-intro`; it is intentionally not committed. Node 24 runs the TypeScript tests/scripts directly.

@@ -19,19 +19,11 @@ type command struct {
 func main() {
 	mode := flag.String("mode", "default", "animation mode")
 	logoPath := flag.String("logo", "", "PNG target used by galaxy-to-logo modes")
-	galaxyStyleName := flag.String("galaxy-style", "", "galaxy visual module: classic or living")
 	transitionEffect := flag.String("transition-effect", "", "input transition module: direct or comet")
 	galaxyEffectsName := flag.String("galaxy-effects", "", "comma-separated galaxy overlays: nebula, starfield, shooting-stars, pulse")
 	logoPresentation := flag.String("logo-presentation", "flat", "settled logo treatment: flat or rotating-3d")
 	flag.Parse()
 	rotatingLogo := *logoPresentation == "rotating-3d"
-	if *galaxyStyleName == "" {
-		if *mode == "galaxy-logo-on-input" {
-			*galaxyStyleName = "living"
-		} else {
-			*galaxyStyleName = "classic"
-		}
-	}
 	if *transitionEffect == "" {
 		if *mode == "galaxy-logo-on-input" {
 			*transitionEffect = "comet"
@@ -115,12 +107,8 @@ func main() {
 				s = newSolver(width, height)
 			}
 			if logo != nil {
-				style := galaxyClassic
-				if *galaxyStyleName == "living" {
-					style = galaxyLiving
-				}
 				s.galaxyEffects = parseGalaxyEffects(*galaxyEffectsName)
-				s.initializeGalaxy(style)
+				s.initializeGalaxy()
 				s.setLogoTarget(
 					logo.target(width, height, c.logoWidth, c.logoRows*2),
 					width,

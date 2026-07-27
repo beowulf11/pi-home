@@ -394,7 +394,6 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 									? {
 										mode: galaxyMode,
 										logoPath: SOURCE_PATH,
-										galaxyStyle: galaxyVariant.style,
 										transitionEffect: galaxyVariant.transition,
 										galaxyEffects: galaxyVariant.effects,
 										logoPresentation: introProfile.logoPresentation,

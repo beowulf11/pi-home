@@ -1,7 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type {
 	GalaxyEffect,
-	GalaxyStyle,
 	GalaxyTransition,
 	LogoPresentation,
 } from "./intro-config.ts";
@@ -24,7 +23,6 @@ export interface FluidTransportOptions {
 	mode?: "default" | "fluid-logo-gather" | "galaxy-logo-on-input";
 	logoPath?: string;
 	/** Independently swappable and composable experiment modules. */
-	galaxyStyle?: GalaxyStyle;
 	transitionEffect?: GalaxyTransition;
 	galaxyEffects?: readonly GalaxyEffect[];
 	logoPresentation?: LogoPresentation;
@@ -88,7 +86,6 @@ export class FluidTransport {
 				|| this.options.mode === "galaxy-logo-on-input"
 				? ["--mode", this.options.mode, "--logo", this.options.logoPath ?? ""]
 				: [];
-			if (this.options.galaxyStyle) args.push("--galaxy-style", this.options.galaxyStyle);
 			if (this.options.transitionEffect) args.push("--transition-effect", this.options.transitionEffect);
 			if (this.options.galaxyEffects?.length) {
 				args.push("--galaxy-effects", this.options.galaxyEffects.join(","));

@@ -29,7 +29,6 @@ type solver struct {
 	targetAlpha                        []byte
 	targetWidth, targetHeight          int
 	galaxy                             []galaxyParticle
-	galaxyStyle                        galaxyStyle
 	galaxyEffects                      galaxyEffect
 	galaxyTime, logoAngle              float64
 	recurringCometPath                 cometPath

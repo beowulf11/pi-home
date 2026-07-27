@@ -39,13 +39,6 @@ var initialCometPath = cometPath{
 	start: point{x: -.08, y: .91}, control: point{x: .18, y: .72}, impact: point{x: .5, y: .53},
 }
 
-type galaxyStyle byte
-
-const (
-	galaxyClassic galaxyStyle = iota
-	galaxyLiving
-)
-
 type galaxyEffect uint8
 
 const (
@@ -79,6 +72,8 @@ const (
 	galaxyArm
 	galaxyKnot
 	galaxyHalo
+	galaxyDust
+	galaxyBackground
 )
 
 type galaxyParticle struct {
@@ -242,6 +237,21 @@ func hashUnit(value int) float64 {
 	return float64(x) / float64(^uint32(0))
 }
 
+// galaxyAngularSpeed approximates a flat outer rotation curve. A softened
+// center avoids an unbounded angular velocity while the outer disk rotates
+// more slowly, giving the arms subtle shear instead of rigidly spinning like a
+// plate. This is the inexpensive visual analogue of a halo-supported curve.
+func galaxyAngularSpeed(radius float64) float64 {
+	return .14 + .105/math.Sqrt(math.Max(.035, radius)+.075)
+}
+
+// logarithmicSpiralAngle produces density-wave style arms. Logarithmic spirals
+// keep a nearly constant pitch angle, unlike the previous tightly wound
+// Archimedean placement whose pitch visibly changed across the disk.
+func logarithmicSpiralAngle(radius float64) float64 {
+	return 2.85 * math.Log(math.Max(.055, radius)/.055)
+}
+
 // beginLiquidation treats an invisible randomized force object as a spatial
 // field, not as a visible projectile. Its offset center, travel bias, swirl and
 // strength give every particle a related but different one-time velocity. The
@@ -309,39 +319,17 @@ func (s *solver) stepLiquidation(dt float64) bool {
 	return settled
 }
 
-// initializeGalaxy repurposes the fluid markers as a deterministic two-arm
-// spiral. Styles are deliberately selectable so the experimental treatment can
-// evolve without changing the established timed intro.
-func (s *solver) initializeGalaxy(style galaxyStyle) {
+// initializeGalaxy repurposes every fluid marker for the single current
+// logarithmic density-wave simulation. Presets vary only transitions and
+// effects; no legacy galaxy implementation remains selectable.
+func (s *solver) initializeGalaxy() {
 	if s.experimentInitialized {
 		return
 	}
 	s.experimentInitialized = true
-	s.galaxyStyle = style
 	s.galaxy = make([]galaxyParticle, len(s.p))
 	coreCount := max(1, len(s.p)/6)
 	for index := range s.p {
-		if style == galaxyClassic {
-			randomA := hashUnit(index*3 + 1)
-			randomB := hashUnit(index*3 + 2)
-			classicCoreCount := max(1, len(s.p)/7)
-			var radius, angle float64
-			if index < classicCoreCount {
-				radius = .085 * math.Sqrt(randomA)
-				angle = randomB * 2 * math.Pi
-			} else {
-				t := float64(index-classicCoreCount) / float64(max(1, len(s.p)-classicCoreCount-1))
-				radius = .055 + .39*math.Sqrt(t)
-				angle = float64(index%2)*math.Pi + radius*15.5 + (randomA-.5)*(.22+.52*t)
-			}
-			s.galaxy[index] = galaxyParticle{
-				role: galaxyArm, radius: radius, angle: angle,
-				baseRadius: radius, baseAngle: angle,
-				angularSpeed: .24 + .36*(1-radius/.46),
-				brightness:   byte(125 + int(randomB*130)), splatScale: 1,
-			}
-			continue
-		}
 		randomA := hashUnit(index*7 + 1)
 		randomB := hashUnit(index*7 + 2)
 		randomC := hashUnit(index*7 + 3)
@@ -357,28 +345,47 @@ func (s *solver) initializeGalaxy(style galaxyStyle) {
 			star.baseAngle = randomB * 2 * math.Pi
 		} else {
 			t := float64(index-coreCount) / float64(max(1, len(s.p)-coreCount-1))
-			if style == galaxyLiving && randomC < .14 {
+			if s.galaxyEffects&galaxyStarfield != 0 && randomC < .08 {
+				star.role = galaxyBackground
+				star.baseRadius = .5
+				star.baseAngle = randomB * 2 * math.Pi
+				star.brightness = byte(68 + int(randomA*72))
+				star.splatScale = .55
+			} else if randomC < .12 {
 				star.role = galaxyHalo
 				star.baseRadius = .16 + .32*math.Sqrt(randomA)
 				star.baseAngle = randomB * 2 * math.Pi
-				star.brightness = byte(90 + int(randomC*350))
-				star.splatScale = .65
+				star.brightness = byte(76 + int(randomC*390))
+				star.splatScale = .62
 			} else {
 				star.role = galaxyArm
-				if style == galaxyLiving && index%13 == 0 {
+				if index%17 == 0 {
 					star.role = galaxyKnot
-					star.brightness = byte(220 + int(randomC*35))
-					star.splatScale = 1.35
+					star.brightness = byte(225 + int(randomC*30))
+					star.splatScale = 1.45
+				} else if index%7 == 0 {
+					star.role = galaxyDust
+					star.brightness = byte(58 + int(randomC*75))
+					star.splatScale = .72
 				}
-				star.baseRadius = .055 + .40*math.Sqrt(t)
-				arm := float64(index%2) * math.Pi
-				jitter := (randomA - .5) * (.18 + .45*t)
-				star.baseAngle = arm + star.baseRadius*15.2 + jitter
+				star.baseRadius = .055 + .40*math.Pow(t, .58)
+				armIndex := index % 4
+				arm := float64(armIndex) * math.Pi / 2
+				armWidth := .14 + .38*t
+				if armIndex >= 2 {
+					armWidth *= 1.35
+					star.brightness = byte(float64(star.brightness) * .82)
+				}
+				jitter := (randomA - .5) * armWidth
+				star.baseAngle = arm + logarithmicSpiralAngle(star.baseRadius) + jitter
+				if star.role == galaxyDust {
+					star.baseAngle -= .11
+				}
 			}
 		}
 		star.radius = star.baseRadius
 		star.angle = star.baseAngle
-		star.angularSpeed = .24 + .36*(1-star.baseRadius/.48)
+		star.angularSpeed = galaxyAngularSpeed(star.baseRadius)
 		star.epicyclePhase = randomC * 2 * math.Pi
 		star.epicycleRate = .9 + randomA*1.25
 		s.galaxy[index] = star
@@ -388,26 +395,27 @@ func (s *solver) initializeGalaxy(style galaxyStyle) {
 
 func (s *solver) placeGalaxyParticles(dt float64) {
 	s.galaxyTime += dt
-	tilt := 0.0
-	if s.galaxyStyle == galaxyLiving {
-		tilt = .11
-	}
+	tilt := .11
 	for index := range s.p {
 		star := &s.galaxy[index]
 		oldX, oldY := s.p[index].x, s.p[index].y
-		var radius, angle float64
-		if s.galaxyStyle == galaxyLiving {
-			breath := .008 * math.Sin(s.galaxyTime*1.15+star.epicyclePhase)
-			epicycle := .018 * math.Sin(star.epicyclePhase+s.galaxyTime*star.epicycleRate)
-			radius = star.baseRadius * (1 + breath)
-			angle = star.baseAngle + s.galaxyTime*.29 + epicycle
-			if star.role == galaxyHalo {
-				angle = star.baseAngle + s.galaxyTime*(.12+.08*hashUnit(index+91))
+		if star.role == galaxyBackground {
+			baseX := .025 + .95*hashUnit(index*11+3101)
+			baseY := .035 + .93*hashUnit(index*11+3102)
+			s.p[index].x = baseX + .004*math.Sin(star.twinklePhase+s.galaxyTime*.17)
+			s.p[index].y = baseY + .003*math.Cos(star.twinklePhase+s.galaxyTime*.13)
+			if dt > 0 {
+				s.p[index].vx = (s.p[index].x - oldX) / dt
+				s.p[index].vy = (s.p[index].y - oldY) / dt
 			}
-		} else {
-			star.angle += star.angularSpeed * dt
-			angle = star.angle
-			radius = star.radius + .008*math.Sin(star.angle*3+float64(index%17))
+			continue
+		}
+		breath := .010 * math.Sin(s.galaxyTime*1.15+star.epicyclePhase)
+		epicycle := .020 * math.Sin(star.epicyclePhase+s.galaxyTime*star.epicycleRate)
+		radius := star.baseRadius*(1+breath) + .004*math.Sin(star.epicyclePhase+s.galaxyTime*star.epicycleRate)
+		angle := star.baseAngle + s.galaxyTime*star.angularSpeed + epicycle
+		if star.role == galaxyHalo {
+			angle = star.baseAngle + s.galaxyTime*(.12+.08*hashUnit(index+91))
 		}
 		diskX := radius * math.Cos(angle)
 		diskY := radius * .72 * math.Sin(angle)
@@ -423,6 +431,11 @@ func (s *solver) placeGalaxyParticles(dt float64) {
 func (s *solver) stepGalaxy(dt float64) {
 	s.placeGalaxyParticles(dt)
 	s.sequence++
+}
+
+func screenBlendByte(base byte, light float64) byte {
+	light = math.Max(0, math.Min(255, light))
+	return byte(255 - (255-float64(base))*(255-light)/255)
 }
 
 func splatMaximum(out []byte, width, height int, cx, cy, radiusX, radiusY, brightness float64) {
@@ -442,40 +455,43 @@ func splatMaximum(out []byte, width, height int, cx, cy, radiusX, radiusY, brigh
 
 func (s *solver) particleBrightness(index int) float64 {
 	star := s.galaxy[index]
-	if s.galaxyStyle == galaxyClassic {
-		return float64(star.brightness) * (.76 + .24*math.Sin(float64(s.sequence)*.11+float64(index%31)*1.7))
-	}
 	amplitude := .04
-	if star.role == galaxyKnot || star.role == galaxyHalo {
+	if star.role == galaxyKnot || star.role == galaxyHalo || star.role == galaxyBackground {
 		amplitude = .18
 	}
 	return float64(star.brightness) * (1 - amplitude + amplitude*math.Sin(star.twinklePhase+s.galaxyTime*star.twinkleRate))
 }
 
 func (s *solver) rasterGalaxyBackdrop(out []byte, width, height int, intensity float64) {
-	if s.galaxyEffects&galaxyStarfield != 0 {
-		// A fixed deep field with independent slow scintillation gives the galaxy
-		// scale without competing with its moving particle arms.
-		for index := 0; index < width*height; index++ {
-			random := hashUnit(index*19 + 701)
-			if random < .982 {
-				continue
-			}
-			twinkle := .64 + .36*math.Sin(s.galaxyTime*(.5+hashUnit(index+17))+random*31)
-			out[index] = byte(math.Max(0, 112*twinkle*intensity))
-		}
-	}
 	if s.galaxyEffects&galaxyNebula != 0 {
-		// Three broad, breathing clouds combine into a restrained asymmetric haze.
+		// Broad clouds provide depth; an arm-aligned procedural field prevents the
+		// nebula from reading as three unrelated circular blobs.
 		breath := .88 + .12*math.Sin(s.galaxyTime*.43)
 		clouds := []struct{ x, y, rx, ry, brightness float64 }{
-			{.34, .43, .23, .19, 42}, {.63, .57, .28, .16, 34}, {.52, .31, .19, .13, 25},
+			{.34, .43, .23, .19, 38}, {.63, .57, .28, .16, 32}, {.52, .31, .19, .13, 23},
 		}
 		for _, cloud := range clouds {
 			splatMaximum(out, width, height,
 				cloud.x*float64(width-1), cloud.y*float64(height-1),
 				cloud.rx*float64(width), cloud.ry*float64(height),
 				cloud.brightness*breath*intensity)
+		}
+		for y := 0; y < height; y++ {
+			for x := 0; x < width; x++ {
+				dx := (float64(x)/float64(max(1, width-1)) - .5)
+				dy := (float64(y)/float64(max(1, height-1)) - .47) / .72
+				radius := math.Hypot(dx, dy)
+				if radius < .055 || radius > .46 {
+					continue
+				}
+				angle := math.Atan2(-dy, dx) - s.galaxyTime*.31
+				wave := .5 + .5*math.Cos(2*(angle-logarithmicSpiralAngle(radius)))
+				envelope := smoothstep((radius-.055)/.08) * (1 - smoothstep((radius-.34)/.12))
+				noise := .72 + .28*hashUnit((x+1)*92821+(y+1)*68917)
+				light := 38 * math.Pow(wave, 5) * envelope * noise * breath * intensity
+				index := y*width + x
+				out[index] = screenBlendByte(out[index], light)
+			}
 		}
 	}
 }
@@ -505,16 +521,24 @@ func (s *solver) rasterShootingStars(out []byte, width, height int, intensity fl
 }
 
 func (s *solver) rasterGalaxyParticles(width, height int, intensity float64) []byte {
+	return s.rasterGalaxyLayers(width, height, intensity, intensity)
+}
+
+// rasterGalaxyLayers keeps the simulated particle field separate from ambient
+// raster-only scenery. During gathering, deep-field stars and nebulae can fade
+// before the shared particles converge, avoiding the appearance that half of
+// the galaxy was left behind in a different buffer.
+func (s *solver) rasterGalaxyLayers(width, height int, particleIntensity, backdropIntensity float64) []byte {
 	out := make([]byte, width*height)
-	s.rasterGalaxyBackdrop(out, width, height, intensity)
+	s.rasterGalaxyBackdrop(out, width, height, backdropIntensity)
 	baseRadiusX := math.Max(.7, float64(width)/float64(s.nx)*.3)
 	baseRadiusY := math.Max(.7, float64(height)/float64(s.ny)*.3)
-	if s.galaxyStyle == galaxyLiving {
-		// Additive broad splats form continuous arm haze below the crisp stars.
+	// Additive broad splats form continuous arm haze below the crisp stars.
+	{
 		accumulation := make([]float64, width*height)
 		for index, p := range s.p {
 			star := s.galaxy[index]
-			if star.role == galaxyHalo {
+			if star.role == galaxyHalo || star.role == galaxyBackground {
 				continue
 			}
 			cx, cy := p.x*float64(width-1), (1-p.y)*float64(height-1)
@@ -526,20 +550,40 @@ func (s *solver) rasterGalaxyParticles(width, height int, intensity float64) []b
 					}
 					distance := math.Hypot((float64(x)-cx)/radiusX, (float64(y)-cy)/radiusY)
 					if distance < 1 {
-						accumulation[y*width+x] += s.particleBrightness(index) * (1 - distance) * .17 * intensity
+						accumulation[y*width+x] += s.particleBrightness(index) * (1 - distance) * .17 * particleIntensity
 					}
 				}
 			}
 		}
 		for index, value := range accumulation {
-			out[index] = byte(150 * (1 - math.Exp(-value/95)))
+			// Screen blending preserves the independently rendered starfield and
+			// nebula instead of replacing them with the arm accumulation buffer.
+			out[index] = screenBlendByte(out[index], 158*(1-math.Exp(-value/95)))
+		}
+		// Offset dark lanes lead the luminous density wave. Darkening only the
+		// diffuse layers leaves crisp stars visible while carving arm structure.
+		for y := 0; y < height; y++ {
+			for x := 0; x < width; x++ {
+				dx := float64(x)/float64(max(1, width-1)) - .5
+				dy := (float64(y)/float64(max(1, height-1)) - .47) / .72
+				radius := math.Hypot(dx, dy)
+				if radius < .08 || radius > .44 {
+					continue
+				}
+				angle := math.Atan2(-dy, dx) - s.galaxyTime*.31
+				lane := .5 + .5*math.Cos(2*(angle-logarithmicSpiralAngle(radius)+.13))
+				attenuation := 1 - .34*math.Pow(lane, 10)*smoothstep((radius-.08)/.08)
+				out[y*width+x] = byte(float64(out[y*width+x]) * attenuation)
+			}
 		}
 	}
 	for index, p := range s.p {
 		star := s.galaxy[index]
-		brightness := s.particleBrightness(index) * intensity
-		if s.galaxyStyle == galaxyLiving && star.role == galaxyArm {
+		brightness := s.particleBrightness(index) * particleIntensity
+		if star.role == galaxyArm {
 			brightness *= .72
+		} else if star.role == galaxyDust {
+			brightness *= .58
 		}
 		cx, cy := p.x*float64(width-1), (1-p.y)*float64(height-1)
 		splatMaximum(
@@ -548,7 +592,7 @@ func (s *solver) rasterGalaxyParticles(width, height int, intensity float64) []b
 			brightness,
 		)
 	}
-	s.rasterShootingStars(out, width, height, intensity)
+	s.rasterShootingStars(out, width, height, backdropIntensity)
 	// A soft bright nucleus anchors the spiral when ASCII resolution is low.
 	centerX, centerY := .5*float64(width-1), .47*float64(height-1)
 	coreRadiusX := math.Max(2, float64(width)*.026)
@@ -557,12 +601,12 @@ func (s *solver) rasterGalaxyParticles(width, height int, intensity float64) []b
 		pulse := .5 + .5*math.Sin(s.galaxyTime*2.4)
 		splatMaximum(out, width, height, centerX, centerY,
 			coreRadiusX*(1.5+pulse*.9), coreRadiusY*(1.5+pulse*.9),
-			(48+52*pulse)*intensity)
+			(48+52*pulse)*particleIntensity)
 	}
-	if s.galaxyStyle == galaxyLiving {
-		splatMaximum(out, width, height, centerX, centerY, coreRadiusX*2.2, coreRadiusY*2.2, 92*intensity)
-	}
-	splatMaximum(out, width, height, centerX, centerY, coreRadiusX, coreRadiusY, 255*intensity)
+	// Multi-scale bulge: a broad old-star envelope under a hot compact core.
+	splatMaximum(out, width, height, centerX, centerY, coreRadiusX*3.3, coreRadiusY*2.8, 48*particleIntensity)
+	splatMaximum(out, width, height, centerX, centerY, coreRadiusX*2.1, coreRadiusY*2.0, 105*particleIntensity)
+	splatMaximum(out, width, height, centerX, centerY, coreRadiusX, coreRadiusY, 255*particleIntensity)
 	return out
 }
 
@@ -825,7 +869,7 @@ func (s *solver) stepLogoGatherToward(dt, progress float64, targets []point) {
 	}
 	eased := smoothstep(progress)
 	centerX, centerY := .5, .5
-	if s.galaxyStyle == galaxyLiving && len(s.gatherOrigins) != len(s.p) {
+	if len(s.gatherOrigins) != len(s.p) {
 		s.gatherOrigins = make([]point, len(s.p))
 		for index, p := range s.p {
 			s.gatherOrigins[index] = point{x: p.x, y: p.y}
@@ -834,7 +878,7 @@ func (s *solver) stepLogoGatherToward(dt, progress float64, targets []point) {
 	for index := range s.p {
 		p := &s.p[index]
 		target := targets[index]
-		if s.galaxyStyle == galaxyLiving && index%9 == 0 && len(s.gatherOrigins) == len(s.p) {
+		if index%9 == 0 && len(s.gatherOrigins) == len(s.p) {
 			origin := s.gatherOrigins[index]
 			overshoot := smoothstep((progress-.50)/.20) * (1 - smoothstep((progress-.86)/.10)) * .10
 			target.x += (target.x - origin.x) * overshoot
@@ -1059,13 +1103,13 @@ func filterEmergingLogoSurfaces(out, projected, surfaces []byte, blend float64) 
 }
 
 func (s *solver) rasterGatherWithTarget(width, height int, progress float64, targetAlpha []byte) ([]byte, []byte) {
-	if s.galaxyStyle == galaxyClassic {
-		return s.rasterClassicGatherWithTarget(width, height, progress, targetAlpha)
-	}
 	// Reuse the selected galaxy renderer so visual modules remain continuous at
 	// the handoff. The rotating target takes over only after particles converge.
 	particleFade := 1 - smoothstep((progress-.78)/.22)
-	out := s.rasterGalaxyParticles(width, height, particleFade)
+	// Continuous nebula and transient streaks are raster scenery, so remove them
+	// early. Deep-field stars are persistent particles and gather with the disk.
+	backdropFade := 1 - smoothstep(progress/.32)
+	out := s.rasterGalaxyLayers(width, height, particleFade, backdropFade)
 	blendLogoTarget(out, targetAlpha, smoothstep((progress-.58)/.42))
 	return out, make([]byte, width*height)
 }
@@ -1080,33 +1124,4 @@ func blendLogoTarget(out, targetAlpha []byte, blend float64) {
 			out[index] = value
 		}
 	}
-}
-
-func (s *solver) rasterClassicGather(width, height int, progress float64) ([]byte, []byte) {
-	return s.rasterClassicGatherWithTarget(width, height, progress, s.targetAlpha)
-}
-
-func (s *solver) rasterClassicGatherWithTarget(width, height int, progress float64, targetAlpha []byte) ([]byte, []byte) {
-	out := make([]byte, width*height)
-	eased := smoothstep(progress)
-	particleFade := 1 - smoothstep((progress-.82)/.18)
-	baseRadiusX := math.Max(.7, float64(width)/float64(s.nx)*.3)
-	baseRadiusY := math.Max(.7, float64(height)/float64(s.ny)*.3)
-	radiusScale := 1 + .18*eased
-	radiusX, radiusY := baseRadiusX*radiusScale, baseRadiusY*radiusScale
-	for index, p := range s.p {
-		star := s.galaxy[index]
-		twinkle := .76 + .24*math.Sin(float64(s.sequence)*.11+float64(index%31)*1.7)
-		starBrightness := float64(star.brightness) * twinkle
-		brightness := (starBrightness*(1-eased) + 255*eased) * particleFade
-		cx, cy := p.x*float64(width-1), (1-p.y)*float64(height-1)
-		splatMaximum(out, width, height, cx, cy, radiusX, radiusY, brightness)
-	}
-	nucleusFade := 1 - smoothstep(progress/.28)
-	centerX, centerY := .5*float64(width-1), .47*float64(height-1)
-	coreRadiusX := math.Max(2, float64(width)*.026)
-	coreRadiusY := math.Max(2, float64(height)*.035)
-	splatMaximum(out, width, height, centerX, centerY, coreRadiusX, coreRadiusY, 255*nucleusFade)
-	blendLogoTarget(out, targetAlpha, smoothstep((progress-.58)/.42))
-	return out, make([]byte, width*height)
 }

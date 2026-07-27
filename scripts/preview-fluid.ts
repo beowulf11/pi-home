@@ -11,10 +11,9 @@ const mode: NonNullable<FluidTransportOptions["mode"]> = requestedMode === "defa
 	? requestedMode
 	: "galaxy-logo-on-input";
 const triggerFrame = Math.max(1, Number(process.argv[5] ?? 180));
-const galaxyStyle = process.argv[6] === "classic" ? "classic" : "living";
-const transitionEffect = process.argv[7] === "direct" ? "direct" : "comet";
+const transitionEffect = process.argv[6] === "direct" ? "direct" : "comet";
 const validEffects = new Set(["nebula", "starfield", "shooting-stars", "pulse"] as const);
-const galaxyEffects = (process.argv[8] ?? "nebula,starfield,pulse")
+const galaxyEffects = (process.argv[7] ?? "nebula,starfield,pulse")
 	.split(",")
 	.filter((effect): effect is "nebula" | "starfield" | "shooting-stars" | "pulse" =>
 		validEffects.has(effect as "nebula" | "starfield" | "shooting-stars" | "pulse"));
@@ -26,7 +25,6 @@ const options: FluidTransportOptions = mode === "default"
 	: {
 		mode,
 		logoPath: join(import.meta.dirname, "..", "source.png"),
-		galaxyStyle,
 		transitionEffect,
 		galaxyEffects,
 	};

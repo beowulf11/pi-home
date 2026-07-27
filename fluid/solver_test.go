@@ -172,7 +172,7 @@ func TestOutputResizeDoesNotResetState(t *testing.T) {
 
 func TestLiquidationViewHasNoTerrainOrLand(t *testing.T) {
 	s := newSolver(80, 40)
-	s.initializeGalaxy(galaxyLiving)
+	s.initializeGalaxy()
 	s.beginLiquidation()
 	if s.terrainHeight(.1) != s.terrainHeight(.9) || s.terrainSlope(.9) != 0 {
 		t.Fatal("liquidation retained the wave scene's beach geometry")
@@ -188,7 +188,7 @@ func TestLiquidationViewHasNoTerrainOrLand(t *testing.T) {
 
 func TestLiquidationInitializesOneForceFieldAndEventuallySettles(t *testing.T) {
 	s := newSolver(48, 24)
-	s.initializeGalaxy(galaxyLiving)
+	s.initializeGalaxy()
 	for frame := 0; frame < 30; frame++ {
 		s.stepGalaxy(1.0 / 60)
 	}
@@ -243,7 +243,7 @@ func TestLiquidationInitializesOneForceFieldAndEventuallySettles(t *testing.T) {
 
 func TestGalaxyAndGatherShareTheSameBoundaryRaster(t *testing.T) {
 	s := newSolver(80, 48)
-	s.initializeGalaxy(galaxyClassic)
+	s.initializeGalaxy()
 	s.sequence = experimentGalaxyFrames
 	galaxy, _ := s.rasterGalaxy(80, 48)
 	gather, _ := s.rasterGather(80, 48, 0)
@@ -252,9 +252,9 @@ func TestGalaxyAndGatherShareTheSameBoundaryRaster(t *testing.T) {
 	}
 }
 
-func TestLivingGalaxyRemainsStructuredAndFinite(t *testing.T) {
+func TestGalaxyRemainsStructuredAndFinite(t *testing.T) {
 	s := newSolver(80, 48)
-	s.initializeGalaxy(galaxyLiving)
+	s.initializeGalaxy()
 	for frame := 0; frame < 30*60; frame++ {
 		s.stepGalaxy(1.0 / 60)
 	}
@@ -262,10 +262,11 @@ func TestLivingGalaxyRemainsStructuredAndFinite(t *testing.T) {
 	for index, p := range s.p {
 		roles[s.galaxy[index].role]++
 		if math.IsNaN(p.x) || math.IsNaN(p.y) || p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1 {
-			t.Fatalf("invalid living galaxy particle: %+v", p)
+			t.Fatalf("invalid galaxy particle: %+v", p)
 		}
 	}
-	if roles[galaxyCore] == 0 || roles[galaxyArm] == 0 || roles[galaxyKnot] == 0 || roles[galaxyHalo] == 0 {
+	if roles[galaxyCore] == 0 || roles[galaxyArm] == 0 || roles[galaxyKnot] == 0 ||
+		roles[galaxyHalo] == 0 || roles[galaxyDust] == 0 {
 		t.Fatalf("missing galaxy roles: %#v", roles)
 	}
 	raster, _ := s.rasterGalaxy(80, 48)
@@ -276,7 +277,99 @@ func TestLivingGalaxyRemainsStructuredAndFinite(t *testing.T) {
 		}
 	}
 	if len(levels) < 3 {
-		t.Fatalf("living galaxy lacks tonal depth: %d levels", len(levels))
+		t.Fatalf("galaxy lacks tonal depth: %d levels", len(levels))
+	}
+}
+
+func TestGalaxyUsesAStableDifferentialRotationCurve(t *testing.T) {
+	inner := galaxyAngularSpeed(.06)
+	middle := galaxyAngularSpeed(.24)
+	outer := galaxyAngularSpeed(.44)
+	if !(inner > middle && middle > outer) {
+		t.Fatalf("rotation curve is not differential: inner=%f middle=%f outer=%f", inner, middle, outer)
+	}
+	for _, speed := range []float64{inner, middle, outer} {
+		if math.IsNaN(speed) || math.IsInf(speed, 0) || speed <= 0 || speed > 1 {
+			t.Fatalf("invalid rotation speed: %f", speed)
+		}
+	}
+}
+
+func TestNebulaSurvivesDiffuseArmCompositing(t *testing.T) {
+	plain := newSolver(80, 48)
+	plain.initializeGalaxy()
+	plainRaster, _ := plain.rasterGalaxy(80, 48)
+
+	nebula := newSolver(80, 48)
+	nebula.galaxyEffects = galaxyNebula
+	nebula.initializeGalaxy()
+	nebulaRaster, _ := nebula.rasterGalaxy(80, 48)
+
+	brighter := 0
+	for index := range plainRaster {
+		if nebulaRaster[index] > plainRaster[index] {
+			brighter++
+		}
+	}
+	if brighter < len(plainRaster)/50 {
+		t.Fatalf("nebula was erased by arm compositing: only %d brighter pixels", brighter)
+	}
+}
+
+func TestRasterOnlyBackdropLeavesBeforeParticleGather(t *testing.T) {
+	plain := newSolver(80, 48)
+	plain.initializeGalaxy()
+	dressed := newSolver(80, 48)
+	dressed.galaxyEffects = galaxyNebula | galaxyShootingStars
+	dressed.initializeGalaxy()
+
+	plainGather, _ := plain.rasterGather(80, 48, .4)
+	dressedGather, _ := dressed.rasterGather(80, 48, .4)
+	if !bytes.Equal(plainGather, dressedGather) {
+		t.Fatal("raster-only backdrop remained after the shared particles began gathering")
+	}
+	visible := 0
+	for _, value := range dressedGather {
+		if value > 0 {
+			visible++
+		}
+	}
+	if visible == 0 {
+		t.Fatal("shared galaxy particles disappeared with the backdrop")
+	}
+}
+
+func TestDeepFieldStarsShareTheTransitionParticleSet(t *testing.T) {
+	s := newSolver(80, 48)
+	s.galaxyEffects = galaxyStarfield
+	s.initializeGalaxy()
+	background := make([]int, 0)
+	for index, star := range s.galaxy {
+		if star.role == galaxyBackground {
+			background = append(background, index)
+		}
+	}
+	if len(background) < len(s.p)/50 {
+		t.Fatalf("too few persistent deep-field particles: %d/%d", len(background), len(s.p))
+	}
+
+	s.targets = make([]point, len(s.p))
+	for index := range s.targets {
+		s.targets[index] = point{x: .5, y: .5}
+	}
+	before := 0.0
+	for _, index := range background {
+		before += math.Hypot(s.p[index].x-.5, s.p[index].y-.5)
+	}
+	for frame := 0; frame < 30; frame++ {
+		s.stepLogoGather(1.0/60, .65)
+	}
+	after := 0.0
+	for _, index := range background {
+		after += math.Hypot(s.p[index].x-.5, s.p[index].y-.5)
+	}
+	if after >= before*.85 {
+		t.Fatalf("deep-field particles did not join gather: before=%f after=%f", before, after)
 	}
 }
 
@@ -288,11 +381,11 @@ func TestGalaxyEffectsParseAndCompose(t *testing.T) {
 	}
 
 	plain := newSolver(80, 48)
-	plain.initializeGalaxy(galaxyLiving)
+	plain.initializeGalaxy()
 	plainRaster, _ := plain.rasterGalaxy(80, 48)
 	dressed := newSolver(80, 48)
 	dressed.galaxyEffects = wanted
-	dressed.initializeGalaxy(galaxyLiving)
+	dressed.initializeGalaxy()
 	dressedRaster, _ := dressed.rasterGalaxy(80, 48)
 	if bytes.Equal(plainRaster, dressedRaster) {
 		t.Fatal("composed effects did not alter galaxy raster")
@@ -301,7 +394,7 @@ func TestGalaxyEffectsParseAndCompose(t *testing.T) {
 
 func TestCometAndImpactAreDistinctAndBounded(t *testing.T) {
 	s := newSolver(80, 48)
-	s.initializeGalaxy(galaxyLiving)
+	s.initializeGalaxy()
 	galaxy, _ := s.rasterGalaxy(80, 48)
 	comet, _, accent := s.rasterComet(80, 48, .55)
 	var tail, head bool
@@ -403,7 +496,7 @@ func TestRecurringImpactAndRegatherExcludeGalaxyBackdrop(t *testing.T) {
 	const width, height = 80, 48
 	makeSolver := func(effects galaxyEffect) *solver {
 		s := newSolver(width, height)
-		s.initializeGalaxy(galaxyLiving)
+		s.initializeGalaxy()
 		s.galaxyEffects = effects
 		s.setLogoTarget(source.target(width, height, 48, 40), width, height)
 		s.logoAngle = math.Pi / 4
@@ -433,7 +526,7 @@ func TestLogoParticlesCanBeDestroyedAndGatheredAgain(t *testing.T) {
 	}
 	const width, height = 80, 48
 	s := newSolver(width, height)
-	s.initializeGalaxy(galaxyLiving)
+	s.initializeGalaxy()
 	s.setLogoTarget(source.target(width, height, 48, 40), width, height)
 	s.logoAngle = math.Pi / 4
 	s.recurringCometPath = cometPath{impact: point{x: .5, y: .5}}
@@ -547,7 +640,7 @@ func TestRotatingGatherUsesTheCurrentProjectedLogo(t *testing.T) {
 	}
 	const width, height = 80, 48
 	s := newSolver(width, height)
-	s.initializeGalaxy(galaxyLiving)
+	s.initializeGalaxy()
 	s.setLogoTarget(source.target(width, height, 48, 40), width, height)
 	angle := math.Pi / 3
 	_, _, initialSurfaces := s.rasterRotatingGather(width, height, 0, angle)

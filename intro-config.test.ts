@@ -19,29 +19,28 @@ test("routes temporary directories to the latest experiment", () => {
 test("parses named and composable galaxy routes", () => {
 	assert.deepEqual(parseGalaxyVariant("meteor-shower"), {
 		id: "meteor-shower",
-		style: "living",
 		transition: "comet",
 		effects: ["starfield", "shooting-stars"],
 	});
-	assert.deepEqual(parseGalaxyVariant("classic/direct/nebula+starfield"), {
-		id: "classic/direct/nebula+starfield",
-		style: "classic",
+	assert.deepEqual(parseGalaxyVariant("direct/nebula+starfield"), {
+		id: "direct/nebula+starfield",
 		transition: "direct",
 		effects: ["nebula", "starfield"],
 	});
-	assert.equal(parseGalaxyVariant("living/warp/pulse"), undefined);
-	assert.equal(parseGalaxyVariant("living/comet/pulse+pulse"), undefined);
+	assert.equal(parseGalaxyVariant("warp/pulse"), undefined);
+	assert.equal(parseGalaxyVariant("comet/pulse+pulse"), undefined);
+	assert.equal(parseGalaxyVariant("obsolete/direct/nebula"), undefined);
 });
 
 test("selects one route or honors an explicit combination", () => {
 	const profile = resolveIntroProfile("/tmp/project");
 	const firstPreset = resolveGalaxyVariant(profile, undefined, () => 0);
-	assert.equal(firstPreset.id, "classic-drift");
+	assert.equal(firstPreset.id, "deep-field");
 	assert.equal(firstPreset.transition, "comet");
 	assert.equal(resolveGalaxyVariant(profile, undefined, () => .999).id, "cosmic-storm");
 	assert.equal(
-		resolveGalaxyVariant(profile, "living/direct/nebula+pulse", () => 0).id,
-		"living/direct/nebula+pulse",
+		resolveGalaxyVariant(profile, "direct/nebula+pulse", () => 0).id,
+		"direct/nebula+pulse",
 	);
 });
 

@@ -7,14 +7,12 @@ export type IntroAnimationId =
 	| "fluid-logo-gather"
 	| "galaxy-logo-on-input";
 
-export type GalaxyStyle = "classic" | "living";
 export type GalaxyTransition = "direct" | "comet";
 export type GalaxyEffect = "nebula" | "starfield" | "shooting-stars" | "pulse";
 export type LogoPresentation = "flat" | "rotating-3d";
 
 export interface GalaxyVariant {
 	id: string;
-	style: GalaxyStyle;
 	transition: GalaxyTransition;
 	effects: readonly GalaxyEffect[];
 }
@@ -30,20 +28,20 @@ export interface IntroProfile {
 }
 
 export const GALAXY_PRESETS: Readonly<Record<string, GalaxyVariant>> = {
-	"classic-drift": {
-		id: "classic-drift", style: "classic", transition: "comet", effects: ["starfield"],
+	"deep-field": {
+		id: "deep-field", transition: "comet", effects: ["starfield"],
 	},
-	"living-nebula": {
-		id: "living-nebula", style: "living", transition: "comet", effects: ["nebula", "pulse"],
+	"spiral-nebula": {
+		id: "spiral-nebula", transition: "comet", effects: ["nebula", "pulse"],
 	},
 	"comet-trail": {
-		id: "comet-trail", style: "living", transition: "comet", effects: ["starfield"],
+		id: "comet-trail", transition: "comet", effects: ["starfield"],
 	},
 	"meteor-shower": {
-		id: "meteor-shower", style: "living", transition: "comet", effects: ["starfield", "shooting-stars"],
+		id: "meteor-shower", transition: "comet", effects: ["starfield", "shooting-stars"],
 	},
 	"cosmic-storm": {
-		id: "cosmic-storm", style: "living", transition: "comet",
+		id: "cosmic-storm", transition: "comet",
 		effects: ["nebula", "starfield", "shooting-stars", "pulse"],
 	},
 };
@@ -92,27 +90,24 @@ export function resolveIntroProfile(cwd: string): IntroProfile {
 		?? DEFAULT_INTRO_PROFILE;
 }
 
-const STYLES = new Set<GalaxyStyle>(["classic", "living"]);
 const TRANSITIONS = new Set<GalaxyTransition>(["direct", "comet"]);
 const EFFECTS = new Set<GalaxyEffect>(["nebula", "starfield", "shooting-stars", "pulse"]);
 
 /**
  * Resolves either a named preset or a composable path such as
- * `living/comet/nebula+starfield+pulse`. Unknown or duplicate modules reject
- * the whole path so a typo can never silently change an intro.
+ * `comet/nebula+starfield+pulse`. Every route uses the one current galaxy
+ * implementation. Unknown or duplicate modules reject the whole path.
  */
 export function parseGalaxyVariant(path: string): GalaxyVariant | undefined {
 	const preset = GALAXY_PRESETS[path];
 	if (preset) return { ...preset, effects: [...preset.effects] };
-	const [styleName, transitionName, effectNames = "", ...extra] = path.split("/");
-	if (extra.length > 0 || !STYLES.has(styleName as GalaxyStyle)
-		|| !TRANSITIONS.has(transitionName as GalaxyTransition)) return undefined;
+	const [transitionName, effectNames = "", ...extra] = path.split("/");
+	if (extra.length > 0 || !TRANSITIONS.has(transitionName as GalaxyTransition)) return undefined;
 	const effects = effectNames === "" ? [] : effectNames.split("+");
 	if (new Set(effects).size !== effects.length
 		|| effects.some((effect) => !EFFECTS.has(effect as GalaxyEffect))) return undefined;
 	return {
 		id: path,
-		style: styleName as GalaxyStyle,
 		transition: transitionName as GalaxyTransition,
 		effects: effects as GalaxyEffect[],
 	};
@@ -132,5 +127,5 @@ export function resolveGalaxyVariant(
 		? profile.galaxyVariants
 		: DEFAULT_GALAXY_VARIANTS;
 	const index = Math.min(choices.length - 1, Math.floor(Math.max(0, random()) * choices.length));
-	return parseGalaxyVariant(choices[index]!) ?? parseGalaxyVariant("living-nebula")!;
+	return parseGalaxyVariant(choices[index]!) ?? parseGalaxyVariant("spiral-nebula")!;
 }
