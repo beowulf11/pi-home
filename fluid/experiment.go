@@ -19,10 +19,7 @@ const (
 	experimentGatherFrames        = 210
 	recurringCometDelayMinFrames  = 10 * 60
 	recurringCometDelayMaxFrames  = 30 * 60
-	liquidationMinFrames          = 120
 	liquidationMaxFrames          = 420
-	liquidationStableFrames       = 30
-	liquidationStableSpeed        = .04
 	logoRotationRadiansPerSecond  = 2 * math.Pi / 8
 	logoSurfaceFront              = byte(32)
 	logoSurfaceEdge               = byte(64)
@@ -225,6 +222,8 @@ func (s *solver) setLogoTarget(alpha []byte, width, height int) {
 	})
 	s.targets = make([]point, len(s.p))
 	s.gatherOrigins = nil
+	s.gatherWaypoints = nil
+	s.gatherDelays = nil
 	for rank, particleIndex := range particleOrder {
 		s.targets[particleIndex] = targets[targetOrder[rank]]
 	}
@@ -262,7 +261,6 @@ func (s *solver) beginLiquidation() {
 	}
 	s.liquidationInitialized = true
 	s.liquidationFrames = 0
-	s.stableFrames = 0
 	centerX := .5 + (rand.Float64()-.5)*.24
 	centerY := .53 + (rand.Float64()-.5)*.20
 	travelAngle := rand.Float64() * 2 * math.Pi
@@ -293,30 +291,20 @@ func (s *solver) beginLiquidation() {
 	}
 }
 
-// stepLiquidation returns true once the water has stayed quiet long enough.
-// A finite upper bound guarantees that the intro cannot keep repainting due to
-// tiny residual numerical velocities.
+// stepLiquidation returns true once every particle has fallen through the open
+// bottom. A finite upper bound remains as a safety net for unexpected states.
 func (s *solver) stepLiquidation(dt float64) bool {
 	s.beginLiquidation()
 	s.stepPhysics(dt, false, .96)
 	s.liquidationFrames++
-	maximumSpeed := 0.0
-	for index := range s.p {
-		maximumSpeed = math.Max(maximumSpeed, math.Hypot(s.p[index].vx, s.p[index].vy))
+	if len(s.p) == 0 {
+		return true
 	}
-	if s.liquidationFrames >= liquidationMinFrames && maximumSpeed < liquidationStableSpeed {
-		s.stableFrames++
-	} else {
-		s.stableFrames = 0
+	if s.liquidationFrames >= liquidationMaxFrames {
+		s.p = nil
+		return true
 	}
-	settled := s.stableFrames >= liquidationStableFrames || s.liquidationFrames >= liquidationMaxFrames
-	if settled {
-		for index := range s.p {
-			s.p[index].vx = 0
-			s.p[index].vy = 0
-		}
-	}
-	return settled
+	return false
 }
 
 // initializeGalaxy repurposes every fluid marker for the single current
@@ -655,6 +643,55 @@ func randomRecurringCometDelayFrames() int {
 	return recurringCometDelayMinFrames + rand.IntN(recurringCometDelayMaxFrames-recurringCometDelayMinFrames+1)
 }
 
+func (s *solver) randomizeImpact(path cometPath, minimumStrength, strengthRange, maximumSpin float64) {
+	dx, dy := path.impact.x-path.control.x, path.impact.y-path.control.y
+	length := math.Max(.0001, math.Hypot(dx, dy))
+	s.impactDirection = point{x: dx / length, y: dy / length}
+	s.impactStrength = minimumStrength + rand.Float64()*strengthRange
+	s.impactSpin = (rand.Float64()*2 - 1) * maximumSpin
+	s.impactStyle = rand.IntN(5)
+	s.impactDuration = 14 + rand.IntN(17)
+	s.impactScale = .72 + rand.Float64()*.62
+	s.impactAspect = .58 + rand.Float64()*1.05
+}
+
+func (s *solver) currentImpactFrames() int {
+	if s.impactDuration == 0 {
+		return experimentImpactFrames
+	}
+	return s.impactDuration
+}
+
+func (s *solver) randomizeInitialCometPath() {
+	// Every intro gets a different collision, not merely a different wait before
+	// the same collision. Keep the hit near the galaxy's dense body so the fluid
+	// response remains legible at small terminal sizes.
+	impact := point{x: .38 + rand.Float64()*.24, y: .41 + rand.Float64()*.20}
+	entryAngle := math.Pi * (.08 + rand.Float64()*.84)
+	direction := point{x: math.Cos(entryAngle), y: math.Sin(entryAngle)}
+	start := point{x: impact.x + direction.x*1.05, y: impact.y + direction.y*1.05}
+	bend := .08 + rand.Float64()*.18
+	if rand.Float64() < .5 {
+		bend = -bend
+	}
+	s.activeCometPath = cometPath{
+		start: start,
+		control: point{
+			x: (start.x+impact.x)/2 - direction.y*bend,
+			y: (start.y+impact.y)/2 + direction.x*bend,
+		},
+		impact: impact,
+	}
+	s.randomizeImpact(s.activeCometPath, .78, .55, .24)
+}
+
+func (s *solver) initialPath() cometPath {
+	if s.activeCometPath == (cometPath{}) {
+		return initialCometPath
+	}
+	return s.activeCometPath
+}
+
 func (s *solver) randomizeRecurringCometPath() {
 	impact := point{x: .5, y: .5}
 	if minX, minY, maxX, maxY, ok := s.logoBounds(); ok && s.targetWidth > 1 && s.targetHeight > 1 {
@@ -678,10 +715,11 @@ func (s *solver) randomizeRecurringCometPath() {
 		},
 		impact: impact,
 	}
+	s.randomizeImpact(s.recurringCometPath, .72, .62, .28)
 }
 
 func (s *solver) rasterComet(width, height int, progress float64) ([]byte, []byte, []byte) {
-	return s.rasterCometOverPath(width, height, progress, s.rasterGalaxyParticles(width, height, 1), nil, initialCometPath)
+	return s.rasterCometOverPath(width, height, progress, s.rasterGalaxyParticles(width, height, 1), nil, s.initialPath())
 }
 
 func (s *solver) rasterRecurringComet(width, height int, progress float64, base, baseAccent []byte) ([]byte, []byte, []byte) {
@@ -724,21 +762,52 @@ func (s *solver) beginImpactAt(center point) {
 		return
 	}
 	s.galaxyImpactApplied = true
+	direction := s.impactDirection
+	if direction == (point{}) {
+		direction = point{x: 1}
+	}
+	normal := point{x: -direction.y, y: direction.x}
 	for index := range s.p {
 		p := &s.p[index]
 		dx, dy := p.x-center.x, p.y-center.y
 		distance := math.Max(.025, math.Hypot(dx, dy))
-		impulse := .16 + .62*math.Exp(-distance/.20)
-		p.vx = p.vx*.18 + dx/distance*impulse - dy/distance*.13
-		p.vy = p.vy*.18 + dy/distance*impulse + dx/distance*.13
+		rx, ry := dx/distance, dy/distance
+		strength := s.impactStrength
+		if strength == 0 {
+			strength = 1
+		}
+		impulse := strength * (.16 + .62*math.Exp(-distance/.20))
+		vx, vy := rx, ry
+		switch s.impactStyle {
+		case 1: // directional punch: most debris continues with the meteor
+			vx, vy = rx*.30+direction.x*.92, ry*.30+direction.y*.92
+		case 2: // vortex burst: collision energy rolls around the contact point
+			spin := 1.0
+			if s.impactSpin < 0 {
+				spin = -1
+			}
+			vx, vy = rx*.48-ry*.88*spin, ry*.48+rx*.88*spin
+		case 3: // split/shear: the logo tears into two opposing sheets
+			side := 1.0
+			if dx*normal.x+dy*normal.y < 0 {
+				side = -1
+			}
+			vx, vy = direction.x*.28+normal.x*side, direction.y*.28+normal.y*side
+		case 4: // crater: a narrow forward cone breaks out into a radial rim
+			alignment := math.Max(0, rx*direction.x+ry*direction.y)
+			vx, vy = rx*(.55+.55*alignment)+direction.x*.45, ry*(.55+.55*alignment)+direction.y*.45
+		}
+		spin := s.impactSpin
+		p.vx = p.vx*.18 + vx*impulse - ry*spin
+		p.vy = p.vy*.18 + vy*impulse + rx*spin
 	}
 }
 
 func (s *solver) rasterGalaxyImpactHold(width, height int) ([]byte, []byte) {
-	return rasterImpactHold(width, height, s.rasterGalaxyParticles(width, height, 1), initialCometPath.impact)
+	return s.rasterImpactHold(width, height, s.rasterGalaxyParticles(width, height, 1), s.initialPath().impact)
 }
 
-func rasterImpactHold(width, height int, base []byte, center point) ([]byte, []byte) {
+func (s *solver) rasterImpactHold(width, height int, base []byte, center point) ([]byte, []byte) {
 	out := make([]byte, width*height)
 	copy(out, base)
 	// Freeze the collision for one overexposed frame before releasing its energy.
@@ -746,23 +815,64 @@ func rasterImpactHold(width, height int, base []byte, center point) ([]byte, []b
 		out[index] = byte(min(255, int(value)+int(value)/3))
 	}
 	centerX, centerY := center.x*float64(width-1), (1-center.y)*float64(height-1)
-	splatMaximum(out, width, height, centerX, centerY, math.Max(3, float64(width)*.075), math.Max(3, float64(height)*.11), 255)
+	scale, aspect := s.impactScale, s.impactAspect
+	if scale == 0 {
+		scale = 1
+	}
+	if aspect == 0 {
+		aspect = 1
+	}
+	splatMaximum(out, width, height, centerX, centerY,
+		math.Max(3, float64(width)*.075*scale*aspect),
+		math.Max(3, float64(height)*.11*scale/aspect), 255)
 	return out, make([]byte, width*height)
 }
 
 func (s *solver) stepImpactAt(dt, progress float64, center point) {
 	s.beginImpactAt(center)
-	waveRadius := .30 * smoothstep(progress)
+	scale := s.impactScale
+	if scale == 0 {
+		scale = 1
+	}
+	aspect := s.impactAspect
+	if aspect == 0 {
+		aspect = 1
+	}
+	direction := s.impactDirection
+	if direction == (point{}) {
+		direction = point{x: 1}
+	}
+	normal := point{x: -direction.y, y: direction.x}
+	waveRadius := .30 * scale * smoothstep(progress)
 	for index := range s.p {
 		p := &s.p[index]
 		dx, dy := p.x-center.x, p.y-center.y
-		distance := math.Max(.001, math.Hypot(dx, dy))
-		// The narrow moving force band physically displaces particles as the
-		// visible shock ring reaches them, rather than painting a passive overlay.
-		bandDistance := (distance - waveRadius) / .035
-		waveForce := math.Exp(-bandDistance*bandDistance) * .34
-		p.vx += dx / distance * waveForce * dt
-		p.vy += dy / distance * waveForce * dt
+		along, across := dx*direction.x+dy*direction.y, dx*normal.x+dy*normal.y
+		distance := math.Max(.001, math.Hypot(along/aspect, across*aspect))
+		bandDistance := (distance - waveRadius) / (.028 + .014*scale)
+		waveForce := math.Exp(-bandDistance*bandDistance) * (.24 + .18*scale)
+		rx, ry := dx/math.Max(.001, math.Hypot(dx, dy)), dy/math.Max(.001, math.Hypot(dx, dy))
+		fx, fy := rx, ry
+		switch s.impactStyle {
+		case 1:
+			fx, fy = direction.x, direction.y
+		case 2:
+			fx, fy = -ry, rx
+			if s.impactSpin < 0 {
+				fx, fy = -fx, -fy
+			}
+		case 3:
+			side := 1.0
+			if across < 0 {
+				side = -1
+			}
+			fx, fy = normal.x*side, normal.y*side
+		case 4:
+			pulse := .55 + .45*math.Sin(progress*math.Pi*3)
+			fx, fy = rx*pulse+direction.x*(1-pulse), ry*pulse+direction.y*(1-pulse)
+		}
+		p.vx += fx * waveForce * dt
+		p.vy += fy * waveForce * dt
 		p.x = math.Max(0, math.Min(1, p.x+p.vx*dt))
 		p.y = math.Max(0, math.Min(1, p.y+p.vy*dt))
 		p.vx *= .965
@@ -772,41 +882,72 @@ func (s *solver) stepImpactAt(dt, progress float64, center point) {
 }
 
 func (s *solver) stepGalaxyImpact(dt, progress float64) {
-	s.stepImpactAt(dt, progress, initialCometPath.impact)
+	s.stepImpactAt(dt, progress, s.initialPath().impact)
 }
 
 func (s *solver) stepLogoImpact(dt, progress float64) {
 	s.stepImpactAt(dt, progress, s.recurringCometPath.impact)
 }
 
-func rasterImpactOver(width, height int, progress float64, out []byte, center point) ([]byte, []byte) {
+func (s *solver) rasterImpactOver(width, height int, progress float64, out []byte, center point) ([]byte, []byte) {
 	centerX, centerY := center.x*float64(width-1), (1-center.y)*float64(height-1)
-	flash := 1 - smoothstep(progress/.28)
-	splatMaximum(out, width, height, centerX, centerY, math.Max(2, float64(width)*.07)*flash, math.Max(2, float64(height)*.10)*flash, 255*flash)
-	if progress < .92 {
-		ringRadiusX := float64(width) * (.025 + .25*smoothstep(progress))
-		ringRadiusY := float64(height) * (.035 + .20*smoothstep(progress))
-		thickness := math.Max(1, float64(width)*.008)
-		fade := 1 - smoothstep((progress-.58)/.34)
-		for y := max(0, int(centerY-ringRadiusY-thickness)); y <= min(height-1, int(centerY+ringRadiusY+thickness)); y++ {
-			for x := max(0, int(centerX-ringRadiusX-thickness)); x <= min(width-1, int(centerX+ringRadiusX+thickness)); x++ {
-				distance := math.Hypot((float64(x)-centerX)/ringRadiusX, (float64(y)-centerY)/ringRadiusY)
-				value := 220 * fade * math.Max(0, 1-math.Abs(distance-1)*ringRadiusX/thickness)
+	scale, aspect := s.impactScale, s.impactAspect
+	if scale == 0 {
+		scale = 1
+	}
+	if aspect == 0 {
+		aspect = 1
+	}
+	direction := s.impactDirection
+	if direction == (point{}) {
+		direction = point{x: 1}
+	}
+	normal := point{x: -direction.y, y: direction.x}
+	flash := 1 - smoothstep(progress/(.20+.14*scale))
+	flashX := math.Max(2, float64(width)*.065*scale*aspect) * flash
+	flashY := math.Max(2, float64(height)*.085*scale/aspect) * flash
+	splatMaximum(out, width, height, centerX, centerY, flashX, flashY, 255*flash)
+	paintRing := func(ringProgress, brightness, offset float64) {
+		if ringProgress < 0 || ringProgress >= .94 {
+			return
+		}
+		ringRadius := (.025 + .27*smoothstep(ringProgress)) * scale
+		cx := center.x + direction.x*offset*smoothstep(ringProgress)
+		cy := center.y + direction.y*offset*smoothstep(ringProgress)
+		thickness := .007 + .004*scale
+		fade := 1 - smoothstep((ringProgress-.54)/.40)
+		for y := 0; y < height; y++ {
+			worldY := 1 - float64(y)/float64(max(1, height-1))
+			for x := 0; x < width; x++ {
+				worldX := float64(x) / float64(max(1, width-1))
+				dx, dy := worldX-cx, worldY-cy
+				along := (dx*direction.x + dy*direction.y) / aspect
+				across := (dx*normal.x + dy*normal.y) * aspect
+				distance := math.Hypot(along, across)
+				value := brightness * fade * math.Max(0, 1-math.Abs(distance-ringRadius)/thickness)
 				if byte(value) > out[y*width+x] {
 					out[y*width+x] = byte(value)
 				}
 			}
 		}
 	}
+	offset := 0.0
+	if s.impactStyle == 1 || s.impactStyle == 4 {
+		offset = .09
+	}
+	paintRing(progress, 220, offset)
+	if s.impactStyle == 2 || s.impactStyle == 3 || s.impactStyle == 4 {
+		paintRing(progress-.18, 155, -offset*.45)
+	}
 	return out, make([]byte, width*height)
 }
 
 func (s *solver) rasterGalaxyImpact(width, height int, progress float64) ([]byte, []byte) {
-	return rasterImpactOver(width, height, progress, s.rasterGalaxyParticles(width, height, 1), initialCometPath.impact)
+	return s.rasterImpactOver(width, height, progress, s.rasterGalaxyParticles(width, height, 1), s.initialPath().impact)
 }
 
 func (s *solver) rasterLogoImpact(width, height int, progress float64) ([]byte, []byte) {
-	return rasterImpactOver(width, height, progress, s.rasterLogoParticles(width, height, 1), s.recurringCometPath.impact)
+	return s.rasterImpactOver(width, height, progress, s.rasterLogoParticles(width, height, 1), s.recurringCometPath.impact)
 }
 
 func smoothstep(value float64) float64 {
@@ -814,9 +955,122 @@ func smoothstep(value float64) float64 {
 	return value * value * (3 - 2*value)
 }
 
-// stepLogoGather transitions from the physical ocean into a directed particle
-// flow. Early motion retains momentum and adds curl; late motion becomes a
-// critically damped approach to the exact SVG-derived destinations.
+// prepareDynamicGather rebuilds particle-to-logo correspondence from the
+// positions produced by this particular collision. A coarse randomized spatial
+// ordering keeps matching O(P log P), while chunk delays and shared waypoints
+// make groups of debris take distinct routes instead of replaying one morph.
+func (s *solver) prepareDynamicGather() {
+	if len(s.targets) != len(s.p) || len(s.p) == 0 {
+		return
+	}
+	const chunksX, chunksY = 8, 6
+	angle := rand.Float64() * 2 * math.Pi
+	cosine, sine := math.Cos(angle), math.Sin(angle)
+	reverse := rand.IntN(2) == 0
+	spatialKey := func(p point) (int, float64) {
+		dx, dy := p.x-.5, p.y-.5
+		x := math.Max(0, math.Min(.999999, .5+dx*cosine-dy*sine))
+		y := math.Max(0, math.Min(.999999, .5+dx*sine+dy*cosine))
+		cellX, cellY := int(x*chunksX), int(y*chunksY)
+		if (cellY%2 == 1) != reverse {
+			cellX = chunksX - 1 - cellX
+		}
+		return cellY*chunksX + cellX, y + x*.01
+	}
+	particleOrder := make([]int, len(s.p))
+	targetOrder := make([]int, len(s.targets))
+	for index := range particleOrder {
+		particleOrder[index], targetOrder[index] = index, index
+	}
+	sort.Slice(particleOrder, func(i, j int) bool {
+		a := s.p[particleOrder[i]]
+		b := s.p[particleOrder[j]]
+		ka, la := spatialKey(point{x: a.x, y: a.y})
+		kb, lb := spatialKey(point{x: b.x, y: b.y})
+		return ka < kb || (ka == kb && la < lb)
+	})
+	sort.Slice(targetOrder, func(i, j int) bool {
+		ka, la := spatialKey(s.targets[targetOrder[i]])
+		kb, lb := spatialKey(s.targets[targetOrder[j]])
+		return ka < kb || (ka == kb && la < lb)
+	})
+
+	availableTargets := append([]point(nil), s.targets...)
+	s.gatherOrigins = make([]point, len(s.p))
+	s.gatherWaypoints = make([]point, len(s.p))
+	s.gatherDelays = make([]float64, len(s.p))
+	s.gatherCenter = point{x: .32 + rand.Float64()*.36, y: .32 + rand.Float64()*.36}
+	s.gatherStyle = rand.IntN(5)
+	curlRanges := [5][2]float64{{1.25, 2.15}, {.12, .42}, {.28, .72}, {.85, 1.45}, {.24, .65}}
+	curlRange := curlRanges[s.gatherStyle]
+	s.gatherCurl = curlRange[0] + rand.Float64()*(curlRange[1]-curlRange[0])
+	if rand.IntN(2) == 0 {
+		s.gatherCurl = -s.gatherCurl
+	}
+	flowAngle := rand.Float64() * 2 * math.Pi
+	flowX, flowY := math.Cos(flowAngle), math.Sin(flowAngle)
+	chunkDelay := make([]float64, chunksX*chunksY)
+	chunkBend := make([]float64, chunksX*chunksY)
+	for chunk := range chunkDelay {
+		chunkX, chunkY := chunk%chunksX, chunk/chunksX
+		cx := (float64(chunkX)+.5)/chunksX - .5
+		cy := (float64(chunkY)+.5)/chunksY - .5
+		jitter := rand.Float64() * .045
+		switch s.gatherStyle {
+		case 0: // vortex: chunks peel off in a loose, irregular spiral
+			chunkDelay[chunk] = rand.Float64() * .14
+		case 1: // sweep: a diagonal front assembles the mark from one side
+			projection := (cx*flowX + cy*flowY + .72) / 1.44
+			chunkDelay[chunk] = math.Max(0, math.Min(.30, projection*.30+jitter))
+		case 2: // split: outside fragments fold inward in two opposing wings
+			chunkDelay[chunk] = (1-math.Min(1, math.Abs(cx)*2))*.23 + jitter
+		case 3: // collapse/bloom: debris implodes before expanding into the mark
+			chunkDelay[chunk] = rand.Float64() * .09
+		case 4: // wave: neighboring chunks arrive in visibly separated bands
+			chunkDelay[chunk] = (.5+.5*math.Sin(float64(chunkX)*1.35+float64(chunkY)*.82+flowAngle))*.26 + jitter
+		}
+		chunkBend[chunk] = (rand.Float64()*2 - 1) * .24
+	}
+	for rank, particleIndex := range particleOrder {
+		target := availableTargets[targetOrder[rank]]
+		s.targets[particleIndex] = target
+		origin := point{x: s.p[particleIndex].x, y: s.p[particleIndex].y}
+		s.gatherOrigins[particleIndex] = origin
+		chunkX := clamp(int(target.x*chunksX), 0, chunksX-1)
+		chunkY := clamp(int(target.y*chunksY), 0, chunksY-1)
+		chunk := chunkY*chunksX + chunkX
+		chunkCenter := point{x: (float64(chunkX) + .5) / chunksX, y: (float64(chunkY) + .5) / chunksY}
+		dx, dy := chunkCenter.x-origin.x, chunkCenter.y-origin.y
+		waypoint := point{
+			x: (origin.x+chunkCenter.x)/2 - dy*chunkBend[chunk],
+			y: (origin.y+chunkCenter.y)/2 + dx*chunkBend[chunk],
+		}
+		switch s.gatherStyle {
+		case 1:
+			waypoint.x += -flowX*.13 - flowY*.22
+			waypoint.y += -flowY*.13 + flowX*.22
+		case 2:
+			side := 1.0
+			if chunkCenter.x < .5 {
+				side = -1
+			}
+			waypoint.x += side * .28
+			waypoint.y += (chunkCenter.y - .5) * .16
+		case 3:
+			waypoint.x = s.gatherCenter.x + (chunkCenter.x-.5)*.08
+			waypoint.y = s.gatherCenter.y + (chunkCenter.y-.5)*.08
+		case 4:
+			wave := math.Sin(float64(chunkX)*1.35 + float64(chunkY)*.82 + flowAngle)
+			waypoint.x += -dy * wave * .32
+			waypoint.y += dx * wave * .32
+		}
+		s.gatherWaypoints[particleIndex] = waypoint
+		s.gatherDelays[particleIndex] = chunkDelay[chunk]
+	}
+}
+
+// stepLogoGather transitions from the physical debris into a directed particle
+// flow. Matching and routes are rebuilt at the start of every gather.
 func (s *solver) stepLogoGather(dt, progress float64) {
 	s.stepLogoGatherToward(dt, progress, s.targets)
 }
@@ -867,38 +1121,44 @@ func (s *solver) stepLogoGatherToward(dt, progress float64, targets []point) {
 		s.sequence++
 		return
 	}
-	eased := smoothstep(progress)
-	centerX, centerY := .5, .5
-	if len(s.gatherOrigins) != len(s.p) {
-		s.gatherOrigins = make([]point, len(s.p))
-		for index, p := range s.p {
-			s.gatherOrigins[index] = point{x: p.x, y: p.y}
-		}
+	if len(s.gatherOrigins) != len(s.p) || len(s.gatherWaypoints) != len(s.p) {
+		s.prepareDynamicGather()
 	}
 	for index := range s.p {
 		p := &s.p[index]
-		target := targets[index]
-		if index%9 == 0 && len(s.gatherOrigins) == len(s.p) {
-			origin := s.gatherOrigins[index]
-			overshoot := smoothstep((progress-.50)/.20) * (1 - smoothstep((progress-.86)/.10)) * .10
-			target.x += (target.x - origin.x) * overshoot
-			target.y += (target.y - origin.y) * overshoot
+		finalTarget := targets[index]
+		delay := 0.0
+		if len(s.gatherDelays) == len(s.p) {
+			delay = s.gatherDelays[index]
+		}
+		localProgress := math.Max(0, math.Min(1, (progress-delay)/(1-delay)))
+		eased := smoothstep(localProgress)
+		target := finalTarget
+		if len(s.gatherOrigins) == len(s.p) && len(s.gatherWaypoints) == len(s.p) {
+			// Follow a per-cycle quadratic route through a shared chunk waypoint.
+			// The endpoint may rotate, but debris within a chunk travels together.
+			target = bezierPoint(s.gatherOrigins[index], s.gatherWaypoints[index], finalTarget, eased)
+		}
+		if index%9 == 0 {
+			overshoot := smoothstep((localProgress-.50)/.20) * (1 - smoothstep((localProgress-.86)/.10)) * .10
+			target.x += (finalTarget.x - s.gatherOrigins[index].x) * overshoot
+			target.y += (finalTarget.y - s.gatherOrigins[index].y) * overshoot
 		}
 		dx, dy := target.x-p.x, target.y-p.y
-		cx, cy := p.x-centerX, p.y-centerY
+		cx, cy := p.x-s.gatherCenter.x, p.y-s.gatherCenter.y
 		radius := math.Max(.04, math.Hypot(cx, cy))
-		swirl := math.Sin(math.Pi*math.Min(1, progress*1.25)) * (1 - eased) * 1.15
-		desiredX := dx*(1.2+7.8*eased) - cy/radius*swirl
-		desiredY := dy*(1.2+7.8*eased) + cx/radius*swirl
-		response := math.Min(1, dt*(3+15*eased))
+		swirl := math.Sin(math.Pi*math.Min(1, localProgress*1.25)) * (1 - eased) * s.gatherCurl
+		desiredX := dx*(1.6+9.2*eased) - cy/radius*swirl
+		desiredY := dy*(1.6+9.2*eased) + cx/radius*swirl
+		response := math.Min(1, dt*(3+16*eased))
 		p.vx += (desiredX - p.vx) * response
 		p.vy += (desiredY - p.vy) * response
 		p.x += p.vx * dt
 		p.y += p.vy * dt
-		if progress > .9 {
-			snap := smoothstep((progress-.9)/.1) * .22
-			p.x += (target.x - p.x) * snap
-			p.y += (target.y - p.y) * snap
+		if localProgress > .88 {
+			snap := smoothstep((localProgress-.88)/.12) * .25
+			p.x += (finalTarget.x - p.x) * snap
+			p.y += (finalTarget.y - p.y) * snap
 			p.vx *= 1 - snap
 			p.vy *= 1 - snap
 		}
@@ -1074,7 +1334,7 @@ func (s *solver) rasterGather(width, height int, progress float64) ([]byte, []by
 func (s *solver) rasterRotatingGather(width, height int, progress, angle float64) ([]byte, []byte, []byte) {
 	projected, _, surfaces := s.rasterRotatingLogo(width, height, angle)
 	out, land := s.rasterGatherWithTarget(width, height, progress, projected)
-	filterEmergingLogoSurfaces(out, projected, surfaces, smoothstep((progress-.58)/.42))
+	filterEmergingLogoSurfaces(out, projected, surfaces, smoothstep((progress-.76)/.24))
 	return out, land, surfaces
 }
 
@@ -1083,9 +1343,9 @@ func (s *solver) rasterRotatingGather(width, height int, progress, angle float64
 // and arm haze after every recurring collision.
 func (s *solver) rasterRotatingLogoRegather(width, height int, progress, angle float64) ([]byte, []byte, []byte) {
 	projected, _, surfaces := s.rasterRotatingLogo(width, height, angle)
-	particleFade := 1 - smoothstep((progress-.78)/.22)
+	particleFade := 1 - smoothstep((progress-.88)/.12)
 	out := s.rasterLogoParticles(width, height, particleFade)
-	blend := smoothstep((progress - .58) / .42)
+	blend := smoothstep((progress - .76) / .24)
 	blendLogoTarget(out, projected, blend)
 	filterEmergingLogoSurfaces(out, projected, surfaces, blend)
 	return out, make([]byte, width*height), surfaces
@@ -1105,12 +1365,14 @@ func filterEmergingLogoSurfaces(out, projected, surfaces []byte, blend float64) 
 func (s *solver) rasterGatherWithTarget(width, height int, progress float64, targetAlpha []byte) ([]byte, []byte) {
 	// Reuse the selected galaxy renderer so visual modules remain continuous at
 	// the handoff. The rotating target takes over only after particles converge.
-	particleFade := 1 - smoothstep((progress-.78)/.22)
+	particleFade := 1 - smoothstep((progress-.88)/.12)
 	// Continuous nebula and transient streaks are raster scenery, so remove them
 	// early. Deep-field stars are persistent particles and gather with the disk.
 	backdropFade := 1 - smoothstep(progress/.32)
 	out := s.rasterGalaxyLayers(width, height, particleFade, backdropFade)
-	blendLogoTarget(out, targetAlpha, smoothstep((progress-.58)/.42))
+	// Keep the real debris visible for most of the morph; the exact target only
+	// takes over late enough to guarantee a crisp final frame.
+	blendLogoTarget(out, targetAlpha, smoothstep((progress-.76)/.24))
 	return out, make([]byte, width*height)
 }
 

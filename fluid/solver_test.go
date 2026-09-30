@@ -174,8 +174,10 @@ func TestLiquidationViewHasNoTerrainOrLand(t *testing.T) {
 	s := newSolver(80, 40)
 	s.initializeGalaxy()
 	s.beginLiquidation()
-	if s.terrainHeight(.1) != s.terrainHeight(.9) || s.terrainSlope(.9) != 0 {
-		t.Fatal("liquidation retained the wave scene's beach geometry")
+	for x := 0; x < s.nx; x++ {
+		if s.solidCell(x, 0) {
+			t.Fatal("liquidation retained a collision floor")
+		}
 	}
 	s.p = nil // isolate anything painted independently of the liquid
 	pixels, land := s.rasterLiquid(120, 60)
@@ -233,11 +235,11 @@ func TestLiquidationInitializesOneForceFieldAndEventuallySettles(t *testing.T) {
 	if !settled {
 		t.Fatal("liquidation did not stop within its finite frame budget")
 	}
-	for _, p := range s.p {
-		if p.vx != 0 || p.vy != 0 || math.IsNaN(p.x) || math.IsNaN(p.y) ||
-			p.x < 0 || p.x > 1 || p.y < s.terrainHeight(p.x) || p.y > 1 {
-			t.Fatalf("invalid settled liquid particle: %+v", p)
-		}
+	if s.liquidationFrames >= liquidationMaxFrames {
+		t.Fatal("liquidation relied on the safety timeout instead of draining through the open bottom")
+	}
+	if len(s.p) != 0 {
+		t.Fatalf("%d liquid particles remained instead of falling out of view", len(s.p))
 	}
 }
 
@@ -680,6 +682,94 @@ func TestRotatingLogoParticleProjectionIsFiniteAndBounded(t *testing.T) {
 			math.IsInf(particle.y, 0) || particle.x < 0 || particle.x > 1 || particle.y < 0 || particle.y > 1 {
 			t.Fatalf("invalid projected particle: %+v", particle)
 		}
+	}
+}
+
+func TestDynamicGatherUsesCurrentDebrisAndPreservesTargets(t *testing.T) {
+	source, err := loadLogoSource("../source.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const width, height = 80, 48
+	s := newSolver(width, height)
+	s.initializeGalaxy()
+	s.setLogoTarget(source.target(width, height, 0, 0), width, height)
+	beforeTargets := make(map[point]int, len(s.targets))
+	for _, target := range s.targets {
+		beforeTargets[target]++
+	}
+	// Mimic an asymmetric collision so route construction has real debris state
+	// to consume rather than relying on the original deterministic assignment.
+	for index := range s.p {
+		s.p[index].x = math.Mod(float64(index)*.173, 1)
+		s.p[index].y = math.Mod(float64(index)*.317, 1)
+	}
+	s.prepareDynamicGather()
+	if len(s.gatherOrigins) != len(s.p) || len(s.gatherWaypoints) != len(s.p) || len(s.gatherDelays) != len(s.p) {
+		t.Fatal("dynamic gather did not prepare a route for every particle")
+	}
+	distinctRoutes := 0
+	for index, particle := range s.p {
+		if s.gatherOrigins[index] != (point{x: particle.x, y: particle.y}) {
+			t.Fatalf("route %d ignored its current debris position", index)
+		}
+		if math.Hypot(s.gatherWaypoints[index].x-particle.x, s.gatherWaypoints[index].y-particle.y) > .02 {
+			distinctRoutes++
+		}
+		beforeTargets[s.targets[index]]--
+	}
+	if distinctRoutes < len(s.p)/2 {
+		t.Fatalf("only %d/%d particles received a meaningful dynamic route", distinctRoutes, len(s.p))
+	}
+	for target, count := range beforeTargets {
+		if count != 0 {
+			t.Fatalf("dynamic matching changed target multiplicity for %+v by %d", target, count)
+		}
+	}
+}
+
+func TestInitialCometRandomizesCollisionParameters(t *testing.T) {
+	s := newSolver(80, 48)
+	seen := make(map[cometPath]bool)
+	seenStyles := make(map[int]bool)
+	seenDurations := make(map[int]bool)
+	for iteration := 0; iteration < 16; iteration++ {
+		s.randomizeInitialCometPath()
+		path := s.initialPath()
+		seen[path] = true
+		if path.impact.x < .38 || path.impact.x > .62 || path.impact.y < .41 || path.impact.y > .61 {
+			t.Fatalf("randomized impact left the visible galaxy body: %+v", path.impact)
+		}
+		if s.impactStrength < .78 || s.impactStrength > 1.33 || math.Abs(s.impactSpin) > .24 ||
+			s.impactStyle < 0 || s.impactStyle >= 5 || s.currentImpactFrames() < 14 || s.currentImpactFrames() > 30 ||
+			s.impactScale < .72 || s.impactScale > 1.34 || s.impactAspect < .58 || s.impactAspect > 1.63 {
+			t.Fatalf("invalid collision parameters: strength=%f spin=%f style=%d duration=%d scale=%f aspect=%f",
+				s.impactStrength, s.impactSpin, s.impactStyle, s.currentImpactFrames(), s.impactScale, s.impactAspect)
+		}
+		seenStyles[s.impactStyle] = true
+		seenDurations[s.currentImpactFrames()] = true
+	}
+	if len(seen) < 2 || len(seenStyles) < 2 || len(seenDurations) < 2 {
+		t.Fatalf("collision variation was not observable: paths=%d styles=%d durations=%d",
+			len(seen), len(seenStyles), len(seenDurations))
+	}
+}
+
+func TestImpactStylesProduceDifferentShockPatterns(t *testing.T) {
+	const width, height = 80, 48
+	base := make([]byte, width*height)
+	renders := make(map[string]bool)
+	for style := 0; style < 5; style++ {
+		s := newSolver(width, height)
+		s.impactStyle = style
+		s.impactScale = 1
+		s.impactAspect = .72
+		s.impactDirection = point{x: math.Cos(.7), y: math.Sin(.7)}
+		pixels, _ := s.rasterImpactOver(width, height, .52, append([]byte(nil), base...), point{x: .5, y: .5})
+		renders[string(pixels)] = true
+	}
+	if len(renders) < 4 {
+		t.Fatalf("five impact styles collapsed to only %d visible shock patterns", len(renders))
 	}
 }
 

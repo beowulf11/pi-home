@@ -130,6 +130,9 @@ func main() {
 					pixels, land = s.rasterGalaxy(width, height)
 					phase = "galaxy"
 				} else if s.sequence < experimentGalaxyFrames+experimentGatherFrames {
+					if s.sequence == experimentGalaxyFrames {
+						s.prepareDynamicGather()
+					}
 					progress := float64(s.sequence-experimentGalaxyFrames) / float64(experimentGatherFrames-1)
 					if rotatingLogo {
 						s.advanceLogoRotation(1.0 / 60)
@@ -151,6 +154,7 @@ func main() {
 					phase = "galaxy"
 					experimentFrame++
 					if *transitionEffect == "comet" && experimentFrame >= autoCometDelay {
+						s.randomizeInitialCometPath()
 						experimentState, experimentFrame = "comet", 0
 					}
 				case "liquidate":
@@ -184,7 +188,7 @@ func main() {
 						s.advanceLogoRotation(1.0 / 60)
 						s.sequence++
 						logoPixels, _, _ := s.rasterRotatingLogo(width, height, s.logoAngle)
-						pixels, land = rasterImpactHold(width, height, logoPixels, s.recurringCometPath.impact)
+						pixels, land = s.rasterImpactHold(width, height, logoPixels, s.recurringCometPath.impact)
 					} else {
 						pixels, land = s.rasterGalaxyImpactHold(width, height)
 					}
@@ -194,7 +198,8 @@ func main() {
 						experimentState, experimentFrame = "impact", 0
 					}
 				case "impact":
-					progress := float64(experimentFrame) / float64(experimentImpactFrames-1)
+					impactFrames := s.currentImpactFrames()
+					progress := float64(experimentFrame) / float64(impactFrames-1)
 					if recurringComet {
 						s.advanceLogoRotation(1.0 / 60)
 						s.stepLogoImpact(1.0/60, progress)
@@ -205,8 +210,8 @@ func main() {
 					}
 					phase = "impact"
 					experimentFrame++
-					if experimentFrame >= experimentImpactFrames {
-						s.gatherOrigins = nil
+					if experimentFrame >= impactFrames {
+						s.prepareDynamicGather()
 						experimentState, experimentFrame = "gather", 0
 					}
 				case "gather":

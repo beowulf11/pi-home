@@ -20,22 +20,30 @@ const (
 type particle struct{ x, y, vx, vy float64 }
 
 type solver struct {
-	nx, ny                             int
-	p                                  []particle
-	u, v, oldU, oldV, weightU, weightV []float64
-	sequence                           uint64
-	targets                            []point
-	gatherOrigins                      []point
-	targetAlpha                        []byte
-	targetWidth, targetHeight          int
-	galaxy                             []galaxyParticle
-	galaxyEffects                      galaxyEffect
-	galaxyTime, logoAngle              float64
-	recurringCometPath                 cometPath
-	experimentInitialized              bool
-	galaxyImpactApplied                bool
-	liquidationInitialized             bool
-	liquidationFrames, stableFrames    int
+	nx, ny                              int
+	p                                   []particle
+	u, v, oldU, oldV, weightU, weightV  []float64
+	sequence                            uint64
+	targets                             []point
+	gatherOrigins, gatherWaypoints      []point
+	gatherDelays                        []float64
+	gatherCenter                        point
+	gatherCurl                          float64
+	gatherStyle                         int
+	targetAlpha                         []byte
+	targetWidth, targetHeight           int
+	galaxy                              []galaxyParticle
+	galaxyEffects                       galaxyEffect
+	galaxyTime, logoAngle               float64
+	recurringCometPath, activeCometPath cometPath
+	impactStrength, impactSpin          float64
+	impactDirection                     point
+	impactStyle, impactDuration         int
+	impactScale, impactAspect           float64
+	experimentInitialized               bool
+	galaxyImpactApplied                 bool
+	liquidationInitialized              bool
+	liquidationFrames                   int
 }
 
 func newSolver(pixelWidth, pixelHeight int) *solver {
@@ -111,11 +119,6 @@ func (s *solver) sampleVelocity(x, y float64, u, v []float64) (float64, float64)
 
 func (s *solver) terrainHeight(x float64) float64 {
 	base := 1.2 / float64(s.ny)
-	if s.liquidationInitialized {
-		// Liquidation uses only an invisible flat floor. The retained wave scene
-		// keeps its beach, but no slope or land belongs in the final intro view.
-		return base
-	}
 	t := math.Max(0, math.Min(1, (x-beachStart)/(1-beachStart)))
 	// Smoothstep avoids a sharp corner where the flat seabed meets the beach.
 	t = t * t * (3 - 2*t)
@@ -133,6 +136,11 @@ func (s *solver) terrainSlope(x float64) float64 {
 func (s *solver) solidCell(x, y int) bool {
 	if x < 0 || x >= s.nx || y < 0 || y >= s.ny {
 		return true
+	}
+	// Liquidation has an open bottom: particles leave the simulation instead
+	// of colliding with the ocean scene's seabed.
+	if s.liquidationInitialized {
+		return false
 	}
 	cx := (float64(x) + .5) / float64(s.nx)
 	cy := (float64(y) + .5) / float64(s.ny)
@@ -206,6 +214,10 @@ func (s *solver) separateParticles() {
 	horizontalMargin := 1.2 / float64(s.nx)
 	for i := range s.p {
 		s.p[i].x = math.Max(horizontalMargin, math.Min(1-horizontalMargin, s.p[i].x))
+		if s.liquidationInitialized {
+			s.p[i].y = math.Min(1-1.2/float64(s.ny), s.p[i].y)
+			continue
+		}
 		floor := s.terrainHeight(s.p[i].x) + .15/float64(s.ny)
 		s.p[i].y = math.Max(floor, math.Min(1-1.2/float64(s.ny), s.p[i].y))
 	}
@@ -251,7 +263,9 @@ func (s *solver) stepPhysics(dt float64, makeWaves bool, damping float64) {
 		s.u[s.ui(s.nx, y)] = 0
 	}
 	for x := 0; x < s.nx; x++ {
-		s.v[s.vi(x, 0)] = 0
+		if !s.liquidationInitialized {
+			s.v[s.vi(x, 0)] = 0
+		}
 		s.v[s.vi(x, s.ny)] = 0
 	}
 	// Incompressibility projection on the staggered MAC grid. The rising
@@ -337,7 +351,9 @@ func (s *solver) stepPhysics(dt float64, makeWaves bool, damping float64) {
 		s.u[s.ui(s.nx, y)] = 0
 	}
 	for x := 0; x < s.nx; x++ {
-		s.v[s.vi(x, 0)] = 0
+		if !s.liquidationInitialized {
+			s.v[s.vi(x, 0)] = 0
+		}
 		s.v[s.vi(x, s.ny)] = 0
 	}
 	// Grid-to-particle: mostly FLIP, with a little PIC damping.
@@ -367,18 +383,20 @@ func (s *solver) stepPhysics(dt float64, makeWaves bool, damping float64) {
 			p.x = 1 - margin
 			p.vx = -math.Abs(p.vx) * .25
 		}
-		floor := s.terrainHeight(p.x) + .15/float64(s.ny)
-		if p.y < floor {
-			p.y = floor
-			slope := s.terrainSlope(p.x)
-			normalLength := math.Hypot(slope, 1)
-			nx, ny := -slope/normalLength, 1/normalLength
-			intoTerrain := p.vx*nx + p.vy*ny
-			if intoTerrain < 0 {
-				p.vx -= 1.12 * intoTerrain * nx
-				p.vy -= 1.12 * intoTerrain * ny
+		if !s.liquidationInitialized {
+			floor := s.terrainHeight(p.x) + .15/float64(s.ny)
+			if p.y < floor {
+				p.y = floor
+				slope := s.terrainSlope(p.x)
+				normalLength := math.Hypot(slope, 1)
+				nx, ny := -slope/normalLength, 1/normalLength
+				intoTerrain := p.vx*nx + p.vy*ny
+				if intoTerrain < 0 {
+					p.vx -= 1.12 * intoTerrain * nx
+					p.vy -= 1.12 * intoTerrain * ny
+				}
+				p.vx *= .88
 			}
-			p.vx *= .88
 		}
 		topMargin := 1.2 / float64(s.ny)
 		if p.y > 1-topMargin {
@@ -389,6 +407,18 @@ func (s *solver) stepPhysics(dt float64, makeWaves bool, damping float64) {
 	// Two inexpensive relaxation passes preserve visible volume over long runs.
 	s.separateParticles()
 	s.separateParticles()
+	if s.liquidationInitialized {
+		// Keep particles until their raster splat has cleared the viewport, then
+		// discard them so the splash drains away rather than collecting below it.
+		cutoff := -1.5 / float64(s.ny)
+		kept := s.p[:0]
+		for _, p := range s.p {
+			if p.y > cutoff {
+				kept = append(kept, p)
+			}
+		}
+		s.p = kept
+	}
 	s.sequence++
 }
 
