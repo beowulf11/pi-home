@@ -85,6 +85,66 @@ export function rasterToAscii(
 	return lines;
 }
 
+/**
+ * Codex-style spatial Braille: each cell contains a 2×4 dot grid, not a
+ * character selected from a density ramp. Solid logo surfaces retain the
+ * renderer's normal-based lighting without dot erosion. Scene particles retain
+ * raster intensity with a gentle gamma lift. Render the entire scene so galaxy,
+ * destruction, gathering, and liquidation share the same spatial vocabulary.
+ */
+export function rasterToBrailleSurfaces(
+	pixels: Uint8Array,
+	surfaces: Uint8Array,
+	sourceWidth: number,
+	sourceHeight: number,
+	baseLines: readonly string[],
+	options: { includeScene?: boolean; ditherScene?: boolean } = {},
+): { lines: string[]; brightness: (number | undefined)[][] } {
+	const targetHeight = baseLines.length;
+	const targetWidth = [...(baseLines[0] ?? "")].length;
+	validateRaster(pixels, sourceWidth, sourceHeight, targetWidth, targetHeight);
+	validateRaster(surfaces, sourceWidth, sourceHeight, targetWidth, targetHeight);
+	if (baseLines.some((line) => [...line].length !== targetWidth)) {
+		throw new RangeError("Braille base lines must have equal widths");
+	}
+	const bits = [1, 8, 2, 16, 4, 32, 64, 128];
+	const brightness: (number | undefined)[][] = [];
+	const lines = baseLines.map((line, y) => {
+		const shades: (number | undefined)[] = [];
+		brightness.push(shades);
+		return [...line].map((glyph, x) => {
+			let dots = 0;
+			let light = 0;
+			let count = 0;
+			for (let dot = 0; dot < 8; dot++) {
+				const sx = Math.min(sourceWidth - 1, Math.floor((x * 2 + dot % 2 + .5) * sourceWidth / (targetWidth * 2)));
+				const sy = Math.min(sourceHeight - 1, Math.floor((y * 4 + Math.floor(dot / 2) + .5) * sourceHeight / (targetHeight * 4)));
+				const index = sy * sourceWidth + sx;
+				const surface = surfaces[index]!;
+				const isLogo = Boolean(LOGO_SURFACE_DENSITIES[surface]);
+				if ((!options.includeScene && !isLogo) || pixels[index]! <= 16) continue;
+				if (!isLogo && options.ditherScene !== false) {
+					// Spatially stable stochastic coverage: faint haze becomes sparse
+					// starlight rather than a solid ribbon. No time-dependent flicker
+					// or repeating Bayer-grid stripes, and never dither the solid logo.
+					let hash = Math.imul(sx + 1, 0x1f123bb5) ^ Math.imul(sy + 1, 0x5f356495);
+					hash = Math.imul(hash ^ (hash >>> 16), 0x45d9f3b);
+					hash ^= hash >>> 16;
+					const threshold = 16 + 208 * (hash >>> 0) / 0x100000000;
+					if (pixels[index]! <= threshold) continue;
+				}
+				dots |= bits[dot]!;
+				// The solid raster carries real lighting, not sample falloff.
+				light += isLogo ? pixels[index]! / 255 : Math.pow(pixels[index]! / 255, .7);
+				count++;
+			}
+			shades.push(count ? light / count : undefined);
+			return dots ? String.fromCodePoint(0x2800 + dots) : options.includeScene ? " " : glyph;
+		}).join("");
+	});
+	return { lines, brightness };
+}
+
 export function remapCometGlyphs(
 	lines: readonly string[],
 	accent: readonly (readonly number[])[],

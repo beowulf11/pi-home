@@ -592,6 +592,135 @@ func TestLogoRotationLingersAtFrontAndBack(t *testing.T) {
 	}
 }
 
+func TestLogoAlphaFringeDoesNotSoftenEdgesOrLighting(t *testing.T) {
+	const width, height = 64, 48
+	soft := make([]byte, width*height)
+	hard := make([]byte, len(soft))
+	for y := 10; y < 38; y++ {
+		for x := 12; x < 52; x++ {
+			soft[y*width+x] = 48 // Faint source-image antialiasing fringe.
+			if x >= 16 && x < 48 && y >= 14 && y < 34 {
+				soft[y*width+x] = 160 // Solid opacity must not dim the material.
+				hard[y*width+x] = 255
+			}
+		}
+	}
+	a, b := newSolver(width, height), newSolver(width, height)
+	a.setLogoTarget(soft, width, height)
+	b.setLogoTarget(hard, width, height)
+	for _, angle := range []float64{0, .6, 1.3, math.Pi / 2, math.Pi} {
+		actual, _, labels := a.rasterRotatingLogo(width, height, angle)
+		expected, _, expectedLabels := b.rasterRotatingLogo(width, height, angle)
+		if !bytes.Equal(actual, expected) || !bytes.Equal(labels, expectedLabels) {
+			t.Fatalf("source alpha fringe softened the silhouette or lighting at %f", angle)
+		}
+	}
+}
+
+func TestSolidLogoRespondsToFixedSideLight(t *testing.T) {
+	front := logoSolidShade(0, 0, 1, 0)
+	facingLight := logoSolidShade(0, 0, 1, -.8)
+	away := logoSolidShade(0, 0, 1, .8)
+	if facingLight-front < .2 || front-away < .2 {
+		t.Fatalf("face does not show angled-light contrast: facing=%f front=%f away=%f", facingLight, front, away)
+	}
+	if logoSolidShade(-1, 0, 0, 0)-logoSolidShade(1, 0, 0, 0) < .5 {
+		t.Fatal("edges do not distinguish lit side from shadow side")
+	}
+	if math.Abs(logoSolidShade(0, 0, -1, math.Pi)-front) > 1e-12 {
+		t.Fatal("front and reverse do not share the same world-space light")
+	}
+}
+
+func TestCenterUsesSameExtrusionAndLightingAsLogo(t *testing.T) {
+	const width, height = 96, 80
+	s := newSolver(width, height)
+	alpha := make([]byte, width*height)
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			if math.Hypot(float64(x)-47.5, float64(y)-39.5) <= 8 ||
+				(((y >= 10 && y < 20) || (y >= 60 && y < 70)) && ((x >= 12 && x < 20) || (x >= 76 && x < 84))) {
+				alpha[y*width+x] = 255
+			}
+		}
+	}
+	s.setLogoTarget(alpha, width, height)
+	var frontWidth int
+	for _, angle := range []float64{0, .6, math.Pi / 2, math.Pi} {
+		pixels, _, surfaces := s.rasterRotatingLogo(width, height, angle)
+		left, right := width, -1
+		centerFace, centerEdge := false, false
+		for y := 30; y < 50; y++ {
+			for x := 25; x < 71; x++ {
+				i := y*width + x
+				if pixels[i] == 0 {
+					continue
+				}
+				left, right = min(left, x), max(right, x)
+				switch surfaces[i] {
+				case logoSurfaceFront, logoSurfaceBack:
+					centerFace = true
+				case logoSurfaceEdge:
+					centerEdge = true
+				default:
+					t.Fatalf("center has a non-logo surface label: %d", surfaces[i])
+				}
+			}
+		}
+		if right < left {
+			t.Fatalf("center disappeared at %f", angle)
+		}
+		if angle == 0 {
+			frontWidth = right - left + 1
+			if !centerFace {
+				t.Fatal("center has no front face")
+			}
+			center := pixels[39*width+47]
+			arm := pixels[14*width+15]
+			if center != arm {
+				t.Fatalf("center and arms have different lighting: %d vs %d", center, arm)
+			}
+		}
+		if angle == math.Pi/2 && (centerFace || !centerEdge || right-left+1 >= frontWidth) {
+			t.Fatal("center did not rotate edge-on with the logo")
+		}
+	}
+}
+
+func TestRotatingSolidFaceHasNoInteriorCracks(t *testing.T) {
+	const width, height = 96, 80
+	s := newSolver(width, height)
+	alpha := make([]byte, width*height)
+	for y := 16; y < 64; y++ {
+		for x := 20; x < 76; x++ {
+			alpha[y*width+x] = 255
+		}
+	}
+	s.setLogoTarget(alpha, width, height)
+	for _, angle := range []float64{0, .2, .6, 1, 1.3, 2, 2.6, math.Pi} {
+		pixels, _, _ := s.rasterRotatingLogo(width, height, angle)
+		for y := 36; y < 44; y++ {
+			first, last := -1, -1
+			for x := 0; x < width; x++ {
+				if pixels[y*width+x] > 16 {
+					if first < 0 {
+						first = x
+					}
+					last = x
+				}
+			}
+			if first < 0 {
+				t.Fatalf("solid face disappeared at angle %f", angle)
+			}
+			for x := first; x <= last; x++ {
+				if pixels[y*width+x] <= 16 {
+					t.Fatalf("interior crack at angle %f, dot (%d,%d)", angle, x, y)
+				}
+			}
+		}
+	}
+}
+
 func TestRotatingLogoKeepsCenterAndChangesProjection(t *testing.T) {
 	projected, depth := projectLogoPoint(point{}, 0, math.Pi/3, 100)
 	if projected != (point{}) || depth != 0 {
@@ -619,8 +748,18 @@ func TestRotatingLogoKeepsCenterAndChangesProjection(t *testing.T) {
 	for _, label := range quarterSurfaces {
 		seenSurfaces[label] = true
 	}
-	if !seenSurfaces[logoSurfaceFront] || !seenSurfaces[logoSurfaceEdge] {
-		t.Fatalf("angled projection lacks face/edge labels: %#v", seenSurfaces)
+	if !seenSurfaces[logoSurfaceEdge] {
+		t.Fatalf("edge-on projection lacks edge labels: %#v", seenSurfaces)
+	}
+	// An exactly edge-on plane has zero area, so it must not leave ghost
+	// face splats. Check the visible face at an actual oblique angle instead.
+	_, _, angledSurfaces := s.rasterRotatingLogo(width, height, math.Pi/3)
+	angledLabels := map[byte]bool{}
+	for _, label := range angledSurfaces {
+		angledLabels[label] = true
+	}
+	if !angledLabels[logoSurfaceFront] || !angledLabels[logoSurfaceEdge] {
+		t.Fatalf("angled projection lacks face/edge labels: %#v", angledLabels)
 	}
 	for _, raster := range [][]byte{front, quarter} {
 		visible := 0

@@ -1182,7 +1182,7 @@ func (s *solver) rasterLogo(width, height int) ([]byte, []byte) {
 func (s *solver) logoBounds() (int, int, int, int, bool) {
 	minX, minY, maxX, maxY := s.targetWidth, s.targetHeight, -1, -1
 	for index, alpha := range s.targetAlpha {
-		if alpha <= 4 {
+		if alpha < 128 {
 			continue
 		}
 		x, y := index%s.targetWidth, index/s.targetWidth
@@ -1220,11 +1220,15 @@ func paintProjectedLogoSample(out, surfaces []byte, depths []float64, width, hei
 				continue
 			}
 			coverage := math.Max(0, 1-math.Hypot(float64(x)-cx, float64(y)-cy)/radius)
-			if coverage == 0 {
+			// A barely covered nearer wall sample must not punch a dark hole
+			// through an already filled face in the depth buffer.
+			if coverage <= .2 {
 				continue
 			}
 			index := y*width + x
-			value := byte(math.Max(0, math.Min(255, brightness*coverage)))
+			// Coverage controls geometry only; lighting comes from the surface
+			// normal. Multiplying these created moving color stripes on walls.
+			value := byte(math.Max(0, math.Min(255, brightness)))
 			if depth > depths[index]+.08 {
 				depths[index], out[index], surfaces[index] = depth, value, surface
 			} else if math.Abs(depth-depths[index]) <= .08 && value > out[index] {
@@ -1263,32 +1267,54 @@ func (s *solver) rasterRotatingLogo(width, height int, angle float64) ([]byte, [
 		paintProjectedLogoSample(out, surfaces, depths, width, height,
 			centerX+projected.x, centerY+projected.y, projectedDepth, float64(alpha)*shade, surface)
 	}
-	// Far face first is not required by the z-buffer, but makes equal-depth
-	// grazing angles deterministic.
+	// Inverse-rasterize each face: every output dot looks up its source point.
+	// Forward splatting isolated samples leaves moving vertical cracks when
+	// perspective spreads samples apart (especially visible with Braille).
+	// Far face first makes equal-depth grazing angles deterministic.
 	for _, face := range []struct {
 		z, shade float64
 		surface  byte
 	}{
-		{-halfDepth, .52 + .48*math.Max(0, -cosine), logoSurfaceBack},
-		{halfDepth, .52 + .48*math.Max(0, cosine), logoSurfaceFront},
+		{-halfDepth, logoSolidShade(0, 0, -1, angle), logoSurfaceBack},
+		{halfDepth, logoSolidShade(0, 0, 1, angle), logoSurfaceFront},
 	} {
-		for index, alpha := range s.targetAlpha {
-			if alpha <= 4 {
-				continue
+		for y := 0; y < height; y++ {
+			for x := 0; x < width; x++ {
+				u, v := float64(x)-centerX, float64(y)-centerY
+				denominator := cameraDistance*cosine - u*sine
+				if math.Abs(denominator) < 1e-9 {
+					continue
+				}
+				localX := (u*(cameraDistance-face.z*cosine) - cameraDistance*face.z*sine) / denominator
+				depth := -localX*sine + face.z*cosine
+				localY := v * (cameraDistance - depth) / cameraDistance
+				sx, sy := int(math.Floor(centerX+localX+.5)), int(math.Floor(centerY+localY+.5))
+				if sx < 0 || sx >= width || sy < 0 || sy >= height {
+					continue
+				}
+				alpha := s.targetAlpha[sy*width+sx]
+				index := y*width + x
+				// A hard alpha cutoff keeps source antialiasing from turning the
+				// silhouette into a dim fringe. Opacity is separate from lighting.
+				if alpha < 128 || depth <= depths[index] {
+					continue
+				}
+				depths[index] = depth
+				out[index] = byte(255 * face.shade)
+				surfaces[index] = face.surface
 			}
-			paint(index%width, index/width, face.z, face.shade, alpha, face.surface)
 		}
 	}
 	depthSamples := max(2, int(math.Ceil(halfDepth*2))+1)
 	visible := func(x, y int) bool {
-		return x >= 0 && y >= 0 && x < width && y < height && s.targetAlpha[y*width+x] > 4
+		return x >= 0 && y >= 0 && x < width && y < height && s.targetAlpha[y*width+x] >= 128
 	}
 	for index, alpha := range s.targetAlpha {
-		if alpha <= 4 {
+		if alpha < 128 {
 			continue
 		}
 		x, y := index%width, index/width
-		normalX := 0.0
+		normalX, normalY := 0.0, 0.0
 		boundary := false
 		if !visible(x-1, y) {
 			normalX--
@@ -1298,19 +1324,38 @@ func (s *solver) rasterRotatingLogo(width, height int, angle float64) ([]byte, [
 			normalX++
 			boundary = true
 		}
-		if !visible(x, y-1) || !visible(x, y+1) {
+		if !visible(x, y-1) {
+			normalY--
+			boundary = true
+		}
+		if !visible(x, y+1) {
+			normalY++
 			boundary = true
 		}
 		if !boundary {
 			continue
 		}
-		sideShade := .38 + .50*math.Max(0, -normalX*sine)
+		length := math.Hypot(normalX, normalY)
+		if length == 0 {
+			length = 1
+		}
+		sideShade := logoSolidShade(normalX/length, normalY/length, 0, angle)
 		for sample := 0; sample < depthSamples; sample++ {
 			z := -halfDepth + 2*halfDepth*float64(sample)/float64(depthSamples-1)
-			paint(x, y, z, sideShade, alpha, logoSurfaceEdge)
+			paint(x, y, z, sideShade, 255, logoSurfaceEdge)
 		}
 	}
 	return out, land, surfaces
+}
+
+// Every logo component shares the same fixed angled light, without particle
+// dithering or a screen-space spotlight. Faces respond coherently to rotation.
+func logoSolidShade(nx, ny, nz, angle float64) float64 {
+	cosine, sine := math.Cos(angle), math.Sin(angle)
+	worldX, worldZ := nx*cosine+nz*sine, -nx*sine+nz*cosine
+	const lx, ly, lz = -.80, -.25, .54
+	lightLength := math.Sqrt(lx*lx + ly*ly + lz*lz)
+	return .30 + .70*math.Max(0, (worldX*lx+ny*ly+worldZ*lz)/lightLength)
 }
 
 // Synchronize the fluid markers with the currently displayed solid before a

@@ -5,6 +5,7 @@ import {
 	EXPRESSIVE_DENSITY,
 	rasterToAccentMask,
 	rasterToAscii,
+	rasterToBrailleSurfaces,
 	rasterToLandMask,
 	remap3dSurfaceGlyphs,
 	remapCometGlyphs,
@@ -87,6 +88,88 @@ test("preserves the strongest comet accent in each terminal cell", () => {
 		rasterToAccentMask(Uint8Array.from([0, 128, 0, 255]), 2, 2, 1, 1),
 		[[255]],
 	);
+});
+
+test("Braille uses Unicode's spatial 2×4 dot ordering", () => {
+	for (const [dot, bit] of [1, 8, 2, 16, 4, 32, 64, 128].entries()) {
+		const pixels = new Uint8Array(8);
+		const surfaces = new Uint8Array(8);
+		pixels[dot] = 255;
+		surfaces[dot] = 32;
+		const result = rasterToBrailleSurfaces(pixels, surfaces, 2, 4, [" "]);
+		assert.deepEqual(result.lines, [String.fromCodePoint(0x2800 + bit)]);
+		assert.deepEqual(result.brightness, [[1]]);
+	}
+});
+
+test("solid Braille preserves normal-based lighting without eroding geometry", () => {
+	for (const label of [32, 64, 96]) {
+		for (const light of [64, 128, 255]) {
+			const result = rasterToBrailleSurfaces(new Uint8Array(8).fill(light),
+				new Uint8Array(8).fill(label), 2, 4, ["*"]);
+			assert.deepEqual(result.lines, ["⣿"]);
+			assert.ok(Math.abs(result.brightness[0]![0]! - light / 255) < 1e-12);
+		}
+	}
+});
+
+test("Braille leaves scenery and comet cells unchanged and rejects invalid data", () => {
+	for (const label of [0, 128, 255]) {
+		assert.deepEqual(rasterToBrailleSurfaces(new Uint8Array(8).fill(255),
+			new Uint8Array(8).fill(label), 2, 4, ["✦"]),
+			{ lines: ["✦"], brightness: [[undefined]] });
+	}
+	assert.deepEqual(rasterToBrailleSurfaces(new Uint8Array(8).fill(8),
+		new Uint8Array(8).fill(32), 2, 4, [" "]).lines, [" "]);
+	assert.throws(() => rasterToBrailleSurfaces(new Uint8Array(8), new Uint8Array(7), 2, 4, [" "]), /dimensions/);
+});
+
+test("whole-scene Braille shares spatial geometry and preserves scene lighting", () => {
+	for (const label of [0, 128, 255]) {
+		const result = rasterToBrailleSurfaces(Uint8Array.from([255, 0, 64, 0, 128, 0, 32, 0]),
+			new Uint8Array(8).fill(label), 2, 4, ["✦"], { includeScene: true, ditherScene: false });
+		assert.deepEqual(result.lines, ["⡇"]);
+		const expected = [255, 64, 128, 32].reduce((sum, value) => sum + Math.pow(value / 255, .7), 0) / 4;
+		assert.ok(Math.abs(result.brightness[0]![0]! - expected) < 1e-12);
+	}
+	assert.deepEqual(rasterToBrailleSurfaces(new Uint8Array(8), new Uint8Array(8),
+		2, 4, ["✦"], { includeScene: true }).lines, [" "]);
+});
+
+test("scene shading distinguishes faint haze, arms, and bright cores without changing dots", () => {
+	for (const label of [0, 128, 255]) {
+		const shades = [24, 64, 128, 255].map((intensity) => {
+			const result = rasterToBrailleSurfaces(new Uint8Array(8).fill(intensity),
+				new Uint8Array(8).fill(label), 2, 4, [" "], { includeScene: true, ditherScene: false });
+			assert.deepEqual(result.lines, ["⣿"]);
+			return result.brightness[0]![0]!;
+		});
+		assert.ok(shades[0]! < shades[1]! && shades[1]! < shades[2]! && shades[2]! < shades[3]!);
+		assert.equal(shades[3], 1);
+		assert.ok(shades[1]! > 64 / 255, "gamma lift keeps midtones readable");
+	}
+});
+
+test("scene dot density follows intensity without dithering the solid logo", () => {
+	const width = 64, height = 32;
+	const base = Array.from({ length: height / 4 }, () => " ".repeat(width / 2));
+	const countDots = (lines: string[]) => lines.join("").split("").reduce((sum, glyph) => {
+		let bits = glyph === " " ? 0 : glyph.charCodeAt(0) - 0x2800;
+		while (bits) { sum += bits & 1; bits >>>= 1; }
+		return sum;
+	}, 0);
+	const counts = [24, 64, 128, 255].map((intensity) => {
+		const pixels = new Uint8Array(width * height).fill(intensity);
+		const labels = new Uint8Array(width * height);
+		const result = rasterToBrailleSurfaces(pixels, labels, width, height, base, { includeScene: true });
+		assert.deepEqual(result, rasterToBrailleSurfaces(pixels, labels, width, height, base, { includeScene: true }));
+		return countDots(result.lines);
+	});
+	assert.ok(counts[0]! > 0 && counts[0]! < counts[1]! && counts[1]! < counts[2]! && counts[2]! < counts[3]!);
+	assert.ok(counts[1]! < width * height / 3, "dim haze must not become solid ribbons");
+	assert.equal(counts[3], width * height);
+	assert.equal(countDots(rasterToBrailleSurfaces(new Uint8Array(width * height).fill(24),
+		new Uint8Array(width * height).fill(32), width, height, base, { includeScene: true }).lines), width * height);
 });
 
 test("prior glyph provides deterministic temporal hysteresis", () => {

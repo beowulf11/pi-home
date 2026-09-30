@@ -16,12 +16,10 @@ import { FluidTransport } from "./fluid-transport.ts";
 import { defaultWaveDimensions, EDITOR_FOOTER_ROWS } from "./intro-layout.ts";
 import { resolveGalaxyVariant, resolveIntroProfile } from "./intro-config.ts";
 import {
-	COSMIC_DENSITY,
 	rasterToAccentMask,
 	rasterToAscii,
 	rasterToLandMask,
-	remap3dSurfaceGlyphs,
-	remapCometGlyphs,
+	rasterToBrailleSurfaces,
 } from "./raster-to-ascii.ts";
 import {
 	animateLogoEntrance,
@@ -145,15 +143,18 @@ function colorizeFluidLine(
 	line: string,
 	land: readonly boolean[],
 	accent: readonly number[] = [],
+	brightness: readonly (number | undefined)[] = [],
 ): string {
 	let output = "";
 	let activeColor = "";
 	for (const [index, character] of [...line].entries()) {
-		const color = accent[index] === 255
-			? COMET_HEAD_COLOR
-			: accent[index] === 128
-				? COMET_TAIL_COLOR
-				: land[index] ? LAND_COLOR : LOGO_COLOR;
+		const shade = brightness[index];
+		const label = accent[index];
+		const baseColor = label === 255 ? COMET_HEAD_COLOR : label === 128 ? COMET_TAIL_COLOR
+			: land[index] ? LAND_COLOR : LOGO_COLOR;
+		const rgb = label === 255 ? [255, 82, 36] : label === 128 ? [210, 24, 48] : [242, 137, 84];
+		const color = shade === undefined || land[index] ? baseColor
+			: `\x1b[38;2;${rgb.map((channel) => Math.round(channel * Math.max(.25, shade))).join(";")}m`;
 		if (color !== activeColor) {
 			output += color;
 			activeColor = color;
@@ -279,6 +280,8 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 			const isGalaxyLogo = galaxyMode !== undefined;
 			const waitsForInput = galaxyMode === "galaxy-logo-on-input";
 			const usesFluid = introProfile.animation === "default-wave" || isGalaxyLogo;
+			// Eight spatial samples per cell, matching Codex's 2×4 Braille grid.
+			const rasterScale = introProfile.logoPresentation === "rotating-3d" ? 2 : 1;
 			const renderStaticLogo = introProfile.animation === "praktik-entry"
 				|| (isGalaxyLogo && !shouldAnimate);
 			let animationActive = shouldAnimate;
@@ -295,6 +298,8 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 				width: number;
 				rows: number;
 				lines: string[];
+				baseLines: string[];
+				brightness?: (number | undefined)[][];
 				land: boolean[][];
 				accent: number[][];
 			} | undefined;
@@ -384,8 +389,8 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 					art = animationFrames.at(-1) ?? [""];
 
 					if (usesFluid && animationActive) {
-						const pixelWidth = dimensions.width;
-						const pixelHeight = dimensions.rows * 2;
+						const pixelWidth = dimensions.width * rasterScale;
+						const pixelHeight = dimensions.rows * 2 * rasterScale;
 						const targetWidth = converted?.lines.reduce(
 							(maximum, line) => Math.max(maximum, visibleWidth(line)),
 							0,
@@ -409,28 +414,23 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 									}
 									: {},
 							);
-							fluidTransport.start(pixelWidth, pixelHeight, targetWidth, targetRows);
+							fluidTransport.start(pixelWidth, pixelHeight, targetWidth * rasterScale, targetRows * rasterScale);
 							if (transitionRequested) fluidTransport.transition();
 						} else {
-							fluidTransport.resize(pixelWidth, pixelHeight, targetWidth, targetRows);
+							fluidTransport.resize(pixelWidth, pixelHeight, targetWidth * rasterScale, targetRows * rasterScale);
 						}
 					}
 					const latest = fluidTransport?.latestFrame;
 					if (latest?.phase === "liquidate") liquidationSeen = true;
 					liquidView = liquidationSeen
 						&& (latest?.phase === "liquidate" || latest?.phase === "settled");
-					const latestMatchesViewport = latest?.width === dimensions.width
-						&& latest.height === dimensions.rows * 2;
+					const latestMatchesViewport = latest?.width === dimensions.width * rasterScale
+						&& latest.height === dimensions.rows * 2 * rasterScale;
 					if (latest && latestMatchesViewport && (latest.sequence !== fluidAscii?.sequence
 						|| dimensions.width !== fluidAscii.width
 						|| dimensions.rows !== fluidAscii.rows)) {
-						const expressive3d = introProfile.logoPresentation === "rotating-3d"
-							&& (latest.phase === "gather" || latest.phase === "settled" || latest.phase === "comet")
-							&& !liquidView;
-						// Keep one base ramp across the whole galaxy → logo sequence. Only
-						// cells carrying a projected logo-surface label change vocabulary.
-						const cosmic = introProfile.logoPresentation === "rotating-3d" && !liquidView
-							&& latest.phase !== "liquidate";
+						// One spatial Braille renderer for every phase, including liquidation.
+						const useBraille = introProfile.logoPresentation === "rotating-3d";
 						const accent = rasterToAccentMask(
 							latest.accent,
 							latest.width,
@@ -445,21 +445,20 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 							dimensions.width,
 							dimensions.rows,
 							{
-								previous: fluidAscii?.lines,
-								density: cosmic ? COSMIC_DENSITY : undefined,
+								previous: fluidAscii?.baseLines,
 							},
 						);
-						let remappedLines = expressive3d
-							? remap3dSurfaceGlyphs(lines, accent, COSMIC_DENSITY)
-							: lines;
-						if (latest.phase === "comet") {
-							remappedLines = remapCometGlyphs(remappedLines, accent);
-						}
+						const braille = useBraille
+							? rasterToBrailleSurfaces(latest.pixels, latest.accent, latest.width, latest.height, lines, { includeScene: true })
+							: undefined;
+						const remappedLines = braille?.lines ?? lines;
 						fluidAscii = {
 							sequence: latest.sequence,
 							width: dimensions.width,
 							rows: dimensions.rows,
 							lines: remappedLines,
+							baseLines: lines,
+							brightness: braille?.brightness,
 							land: rasterToLandMask(
 								latest.land,
 								latest.width,
@@ -541,7 +540,7 @@ export default async function fancyIntro(pi: ExtensionAPI) {
 					...Array.from({ length: topPadding }, () => ""),
 					...renderedArt.map((line, row) => centerLogoLine(
 						renderedLand
-							? colorizeFluidLine(line, renderedLand[row] ?? [], renderedAccent?.[row])
+							? colorizeFluidLine(line, renderedLand[row] ?? [], renderedAccent?.[row], fluidAscii?.brightness?.[row])
 							: line,
 						artCanvasWidth,
 						width,
